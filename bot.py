@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VPS Buddy — OmniRoute (Ollama) + Telegram Bot"""
+"""VPS Buddy — OmniRoute (Ollama/OpenAI) + Telegram Bot"""
 import os, sys, json, logging, subprocess, re, shutil, atexit
 from datetime import datetime
 from dotenv import load_dotenv
@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.error import BadRequest, Conflict, NetworkError
 
 # ============================================================
-# PID LOCK — faqat bitta instansiya ishlashi uchun
+# PID LOCK — faqat bitta instansiya
 # ============================================================
 PIDFILE = "/root/antigravity-project/vps_bot/bot.pid"
 
@@ -18,11 +18,11 @@ def check_single_instance():
         try:
             with open(PIDFILE) as f:
                 old_pid = int(f.read().strip())
-            os.kill(old_pid, 0)  # jarayon mavjudmi?
-            print(f"[XATO] Bot allaqachon ishlayapti (PID {old_pid}). Ikkinchi nusxa ishga tushirish mumkin emas.")
+            os.kill(old_pid, 0)
+            print(f"[XATO] Bot allaqachon ishlayapti (PID {old_pid}).")
             sys.exit(1)
         except (OSError, ValueError):
-            pass  # eski PID, faylni yangilaymiz
+            pass
     with open(PIDFILE, "w") as f:
         f.write(str(os.getpid()))
     atexit.register(lambda: os.remove(PIDFILE) if os.path.exists(PIDFILE) else None)
@@ -93,7 +93,6 @@ async def notify_admins(context, text):
                 logger.warning(f"Admin {aid} ga xabar yuborib bo'lmadi: {e}")
 
 async def safe_reply(update, text, parse_mode="Markdown", **kwargs):
-    """Markdown xato bo'lsa, oddiy matn bilan yuboradi"""
     try:
         await update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
     except BadRequest as e:
@@ -103,17 +102,70 @@ async def safe_reply(update, text, parse_mode="Markdown", **kwargs):
         logger.error(f"Xabar yuborishda xato: {e}")
 
 # ============================================================
-# OmniRoute (Ollama) API
+# OmniRoute API — avtomatik format aniqlash
 # ============================================================
-def omni_generate(prompt, system=""):
+def _omni_ollama(prompt, system=""):
+    """Ollama formatida so'rov"""
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
     payload = {"model": OMNI_MODEL, "prompt": full_prompt, "stream": False}
     headers = {"Content-Type": "application/json"}
     if OMNI_KEY and OMNI_KEY != "not-needed":
         headers["Authorization"] = f"Bearer {OMNI_KEY}"
-    r = requests.post(OMNI_URL, json=payload, headers=headers, timeout=60)
+    url = OMNI_URL if "/api/generate" in OMNI_URL else OMNI_URL.rstrip("/") + "/api/generate"
+    r = requests.post(url, json=payload, headers=headers, timeout=60)
     r.raise_for_status()
     return r.json().get("response", "")
+
+def _omni_openai(prompt, system=""):
+    """OpenAI formatida so'rov"""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    payload = {"model": OMNI_MODEL, "messages": messages, "stream": False}
+    headers = {"Content-Type": "application/json"}
+    if OMNI_KEY and OMNI_KEY != "not-needed":
+        headers["Authorization"] = f"Bearer {OMNI_KEY}"
+    # URLni aniqlash
+    base = OMNI_URL.replace("/api/generate", "").replace("/v1/chat/completions", "").rstrip("/")
+    url = base + "/v1/chat/completions"
+    r = requests.post(url, json=payload, headers=headers, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    if "choices" in data and len(data["choices"]) > 0:
+        return data["choices"][0].get("message", {}).get("content", "")
+    return ""
+
+def omni_generate(prompt, system=""):
+    """Avval Ollama, xato bo'lsa OpenAI formatida sinaydi"""
+    errors = []
+    # 1. Ollama formati
+    try:
+        return _omni_ollama(prompt, system)
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            errors.append(f"Ollama (/api/generate) 404")
+        else:
+            raise
+    except Exception as e:
+        errors.append(f"Ollama: {e}")
+    # 2. OpenAI formati
+    try:
+        return _omni_openai(prompt, system)
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            errors.append(f"OpenAI (/v1/chat/completions) 404")
+        else:
+            raise
+    except Exception as e:
+        errors.append(f"OpenAI: {e}")
+    # 3. Hech biri ishlamadi
+    raise Exception(
+        f"OmniRoute endpoint topilmadi.\n"
+        f"• {errors[0] if len(errors) > 0 else 'Noma\'lum'}\n"
+        f"• {errors[1] if len(errors) > 1 else 'Noma\'lum'}\n\n"
+        f"Tekshiring: curl -s http://localhost:20128/api/tags | head -c 200"
+    )
 
 # ============================================================
 # Shell
@@ -157,13 +209,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 <b>VPS Buddy</b>\n\n"
         "📋 <b>Buyruqlar:</b>\n"
-        "• /code &lt;vazifa&gt; — AI dan kod\n"
-        "• /run &lt;buyruq&gt; — Shell\n"
-        "• /models — Modellar\n"
-        "• /status — VPS holati\n"
+        "• /code &lt;vazifa&gt; — AI dan kod yozish\n"
+        "• /run &lt;buyruq&gt; — Shell buyruq\n"
+        "• /models — Mavjud modellar\n"
+        "• /status — VPS va OmniRoute holati\n"
         "• /myid — ID ingiz\n"
         "• /stop — To'xtatish\n\n"
-        "💬 Matn yuboring — AI suhbat",
+        "💬 Shunchaki matn yuboring — AI suhbat",
         parse_mode="HTML"
     )
     await update.message.reply_text(
@@ -186,7 +238,11 @@ async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not context.args:
         await update.message.reply_text(
-            "❌ Foydalanish: <code>/code python telegram bot yoza oladimi</code>",
+            "❌ <b>Vazifa kiritilmadi!</b>\n\n"
+            "Foydalanish:\n"
+            "<code>/code python telegram bot yoza oladimi</code>\n"
+            "<code>/code flask rest api</code>\n"
+            "<code>/code javascript calculator</code>",
             parse_mode="HTML"
         )
         return
@@ -196,7 +252,7 @@ async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         system = "You are an expert programmer. Write clean, well-commented code. Use markdown code blocks with language identifier."
         ans = omni_generate(f"Write code for: {prompt}", system)
     except Exception as e:
-        await update.message.reply_text(f"❌ Xatolik: {str(e)}")
+        await update.message.reply_text(f"❌ Xatolik:\n<pre>{str(e)[:500]}</pre>", parse_mode="HTML")
         return
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     ext = detect_ext(ans)
@@ -205,7 +261,6 @@ async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     header = f"# Vazifa: {prompt}\n# Vaqt: {datetime.now().isoformat()}\n# User: {u.id}\n\n"
     with open(fp, "w", encoding="utf-8") as f:
         f.write(header + ans)
-    # Markdown xavfsiz yuborish
     await safe_reply(update, f"✅ Kod tayyor!\n\n{ans[:3500]}", parse_mode="Markdown")
     with open(fp, "rb") as f:
         await update.message.reply_document(document=f, caption=f"📁 {fn}")
@@ -217,7 +272,11 @@ async def run_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not context.args:
         await update.message.reply_text(
-            "❌ Foydalanish: <code>/run ls -la</code>",
+            "❌ <b>Buyruq kiritilmadi!</b>\n\n"
+            "Foydalanish:\n"
+            "<code>/run ls -la</code>\n"
+            "<code>/run df -h</code>\n"
+            "<code>/run ps aux | grep python</code>",
             parse_mode="HTML"
         )
         return
@@ -229,8 +288,9 @@ async def run_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base = cmd.split()[0] if cmd else ""
     if base in INTERACTIVE:
         await update.message.reply_text(
-            f"Buyruq `{cmd}` interaktiv. Alternativadan foydalaning.",
-            parse_mode="Markdown"
+            f"⚠️ <code>{cmd}</code> interaktiv buyruq.\n"
+            f"Alternativa: <code>/run {base} -b</code> yoki <code>/run echo 'done'</code>",
+            parse_mode="HTML"
         )
         return
     await update.message.reply_text(f"⚡ <code>{cmd}</code>", parse_mode="HTML")
@@ -245,7 +305,7 @@ async def models_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("⏰ Yuklanmoqda...")
     try:
-        url = OMNI_URL.replace("/api/generate", "/api/tags")
+        url = OMNI_URL.replace("/api/generate", "").replace("/v1/chat/completions", "").rstrip("/") + "/api/tags"
         h = {}
         if OMNI_KEY and OMNI_KEY != "not-needed":
             h["Authorization"] = f"Bearer {OMNI_KEY}"
@@ -278,22 +338,49 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         ds = "?"
     mem = local_run("free -h", timeout=5)
-    omni = "❌"
+    # OmniRoute holatini tekshirish
+    omni_status = "❌"
+    omni_detail = ""
+    base_url = OMNI_URL.replace("/api/generate", "").replace("/v1/chat/completions", "").rstrip("/")
     try:
-        base = OMNI_URL.replace("/api/generate", "")
-        r = requests.get(base, timeout=5)
-        if r.status_code in (200, 307, 404):
-            omni = "✅"
+        r = requests.get(base_url + "/api/tags", timeout=5)
+        if r.status_code == 200:
+            omni_status = "✅ Ollama (/api/tags)"
     except:
         pass
+    try:
+        r = requests.get(base_url + "/v1/models", timeout=5)
+        if r.status_code == 200:
+            omni_status = "✅ OpenAI (/v1/models)"
+    except:
+        pass
+    # generate endpointini tekshirish
+    try:
+        r = requests.post(base_url + "/api/generate", json={"model":"test"}, timeout=5)
+        if r.status_code != 404:
+            omni_detail += "\n✅ /api/generate mavjud"
+        else:
+            omni_detail += "\n❌ /api/generate 404"
+    except:
+        omni_detail += "\n❌ /api/generate ulanmadi"
+    try:
+        r = requests.post(base_url + "/v1/chat/completions", json={"model":"test"}, timeout=5)
+        if r.status_code != 404:
+            omni_detail += "\n✅ /v1/chat/completions mavjud"
+        else:
+            omni_detail += "\n❌ /v1/chat/completions 404"
+    except:
+        omni_detail += "\n❌ /v1/chat/completions ulanmadi"
+
     await update.message.reply_text(
         f"📊 <b>VPS Status</b>\n"
         f"🌐 <code>77.42.77.60</code>\n"
         f"⚡ Load: {ls}\n"
         f"💾 Disk: {ds}\n"
         f"📝 Xotira:\n<pre>{mem}</pre>\n\n"
-        f"🔗 <b>OmniRoute:</b> {omni}\n"
-        f"🤖 Model: <code>{OMNI_MODEL}</code>",
+        f"🔗 <b>OmniRoute:</b> {omni_status}\n"
+        f"🤖 Model: <code>{OMNI_MODEL}</code>\n"
+        f"📡 Endpointlar:{omni_detail}",
         parse_mode="HTML"
     )
 
@@ -321,10 +408,9 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ans = omni_generate(prompt)
         conv.append({"role": "assistant", "content": ans})
         save_chat(u.id, conv)
-        # Markdown xavfsiz yuborish (kesilgan bo'lsa ham xato bermaydi)
         await safe_reply(update, ans[:4000], parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"❌ Xatolik: {str(e)}")
+        await update.message.reply_text(f"❌ Xatolik:\n<pre>{str(e)[:800]}</pre>", parse_mode="HTML")
 
 # ============================================================
 # Xatoliklarni ushlash
@@ -333,13 +419,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Xatolik: {context.error}", exc_info=context.error)
     if isinstance(context.error, Conflict):
         logger.error("❌ Conflict: boshqa bot instansi ishlayapti! Bot to'xtatilmoqda...")
-        # PID faylni o'chirmasdan to'xtatamiz (boshqa instance ishlasin)
         sys.exit(1)
     elif isinstance(context.error, NetworkError):
         logger.warning(f"Tarmoq xatosi: {context.error}")
     elif update and isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Ichki xatolik yuz berdi. Qayta urinib ko'ring.")
+            await update.effective_message.reply_text("❌ Ichki xatolik yuz berdi.")
         except:
             pass
 
