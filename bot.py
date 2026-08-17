@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""VPS Buddy — OmniRoute (Ollama/OpenAI) + Telegram Bot — v2
-Yangiliklar: /auth kirish kodi, chat/code uchun alohida modellar,
-/image /video generatsiya, format-keshlash, batafsil xato xabarlari.
+"""VPS Buddy — OmniRoute (OpenAI-compatible) + Telegram Bot — v3 (shaxsiy)
+Xususiyatlar: /auth kirish kodi, kategoriyalangan+ballangan model tanlash,
+/code (cancel + qayta yozish), inline mini-menyu (/app), OmniRoute health-check,
+avtomatik qayta urinish (retry), batafsil xato xabarlari.
 """
-import os, sys, json, logging, subprocess, re, shutil, atexit, base64
+import os, sys, json, logging, subprocess, re, shutil, atexit, math, time, asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes
+)
 from telegram.error import BadRequest, Conflict, NetworkError
 
 # ============================================================
@@ -41,25 +44,16 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "0").split(",") if x.strip()]
 OMNI_URL = os.getenv("OMNI_URL", "http://localhost:20128/api/generate")
 OMNI_KEY = os.getenv("OMNI_KEY", "not-needed")
-OMNI_MODEL = os.getenv("OMNI_MODEL", "auto/best-coding")     # umumiy zaxira model
+OMNI_MODEL = os.getenv("OMNI_MODEL", "auto/best-coding")   # zaxira/standart model
 
-# Chat va kod yozish uchun alohida modellar (.env da bo'sh bo'lsa avtomatik tanlanadi)
-CHAT_MODEL = os.getenv("CHAT_MODEL", "") or OMNI_MODEL
-CODE_MODEL = os.getenv("CODE_MODEL", "") or OMNI_MODEL
+CODE_MODEL = os.getenv("CODE_MODEL", "") or OMNI_MODEL     # /code buyrug'i ishlatadigan model
 
-# Rasm / video generatsiya — .env da bo'sh bo'lsa o'chirilgan hisoblanadi
-IMAGE_MODEL = os.getenv("IMAGE_MODEL", "")
-VIDEO_MODEL = os.getenv("VIDEO_MODEL", "")
-
-# Kirish kodi tizimi — ADMIN bo'lmagan userlar shu kodni yuborsa botdan foydalana oladi
 ACCESS_CODE = os.getenv("ACCESS_CODE", "yil-2002")
 
 PROJECT_DIR = os.getenv("PROJECT_DIR", "/root/antigravity-project")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/root/antigravity-project/bot-output")
-CHAT_DIR = os.path.join(PROJECT_DIR, "chats")
 AUTH_FILE = os.path.join(PROJECT_DIR, "authorized_users.json")
-for d in [OUTPUT_DIR, CHAT_DIR]:
-    os.makedirs(d, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,10 +68,32 @@ DANGEROUS = [
 ]
 UNSAFE = ["halt", "shutdown -h now", "dd if=/dev/zero", ":(){ :|: & };:", "poweroff", "reboot"]
 INTERACTIVE = ["htop", "top", "nano", "vim", "vi", "less", "more", "watch"]
-MAX_HIST = 20
 
 # Aniqlangan OmniRoute format ("ollama" / "openai") — bir marta aniqlab keshlanadi
 _OMNI_FORMAT = {"mode": None}
+# OmniRoute holati (health-check uchun, faqat o'zgarganda xabar beriladi)
+_OMNI_HEALTH = {"up": None}
+# Model kategoriyalari keshi
+_MODEL_CACHE = {"ts": 0, "data": {}}
+# Har bir user uchun faol /code vazifasi
+ACTIVE_TASKS = {}
+# Har bir user uchun oxirgi /code so'rovi ("Qayta yoz" tugmasi uchun)
+LAST_PROMPT = {}
+
+CATEGORY_ORDER = ["🚀 Auto", "💎 Premium", "⚡ Tez/Groq", "🆓 Bepul"]
+
+HELP_TEXT = (
+    "🤖 <b>VPS Buddy — Yordam</b>\n\n"
+    "• <code>/code &lt;vazifa&gt;</code> — AI dan kod yozish\n"
+    "• <code>/cancel</code> — Ketayotgan /code vazifasini bekor qilish\n"
+    "• <code>/model</code> — Kod yozish uchun model tanlash (kategoriya bo'yicha)\n"
+    "• <code>/app</code> — Tezkor menyu (status/model/kod/yordam)\n"
+    "• <code>/run &lt;buyruq&gt;</code> — Shell buyruq (admin)\n"
+    "• <code>/models</code> — Barcha mavjud modellar (admin)\n"
+    "• <code>/status</code> — VPS va OmniRoute holati (admin)\n"
+    "• <code>/myid</code> — Telegram ID ingiz\n"
+    "• <code>/stop</code> — To'xtatish\n"
+)
 
 # ============================================================
 # Ruxsat (access code) tizimi
@@ -102,7 +118,6 @@ def is_admin(uid):
     return (not ADMIN_IDS or ADMIN_IDS == [0]) or uid in ADMIN_IDS
 
 def is_authorized(uid):
-    """Admin yoki to'g'ri kirish kodini yuborgan foydalanuvchi"""
     return is_admin(uid) or uid in AUTHORIZED_USERS
 
 # ============================================================
@@ -135,75 +150,79 @@ async def notify_admins(context, text):
             except Exception as e:
                 logger.warning(f"Admin {aid} ga xabar yuborib bo'lmadi: {e}")
 
-async def safe_reply(update, text, parse_mode="Markdown", **kwargs):
-    try:
-        await update.message.reply_text(text, parse_mode=parse_mode, **kwargs)
-    except BadRequest as e:
-        logger.warning(f"Markdown xato: {e}. Oddiy matn yuborilmoqda.")
-        await update.message.reply_text(text, **kwargs)
-    except Exception as e:
-        logger.error(f"Xabar yuborishda xato: {e}")
-
-async def send_long(update, text, parse_mode="Markdown", chunk=3800):
-    """Uzun matnlarni bo'lib yuborish (kesmasdan, ma'lumot yo'qolmasligi uchun)"""
-    if not text:
-        text = "(bo'sh javob)"
-    for i in range(0, len(text), chunk):
-        part = text[i:i + chunk]
-        try:
-            await update.message.reply_text(part, parse_mode=parse_mode)
-        except BadRequest:
-            await update.message.reply_text(part)
-
 def _omni_base():
     return OMNI_URL.replace("/api/generate", "").replace("/v1/chat/completions", "").rstrip("/")
 
 # ============================================================
-# Modellarni aniqlash
+# Modellarni aniqlash, kategoriyalash va ballash
 # ============================================================
-def fetch_models():
-    """OmniRoute'dan mavjud model nomlarini olish (Ollama yoki OpenAI formatida)"""
-    base = _omni_base()
-    names = []
+def categorize_entry(entry):
+    mid = entry.get("id", "") or ""
+    typ = entry.get("type")
+    if typ in ("audio", "video"):
+        return None
+    if mid.startswith("felo/"):
+        return None
+    if mid.startswith("auto/"):
+        return "🚀 Auto"
+    if mid.startswith("aug/"):
+        return "💎 Premium"
+    if mid.startswith("groq/") or mid.startswith("g4fgroq/") or mid.startswith("g4f-groq/"):
+        return "⚡ Tez/Groq"
+    return "🆓 Bepul"   # tllm/, oc/, ddgw/, mcode/, pepper/ va h.k.
+
+def score_entry(entry):
+    caps = entry.get("capabilities", {}) or {}
+    s = 0.0
+    if caps.get("reasoning"):
+        s += 2
+    if caps.get("thinking"):
+        s += 2
+    if caps.get("tool_calling"):
+        s += 1
+    if caps.get("vision"):
+        s += 1
+    ctx = entry.get("context_length") or entry.get("max_input_tokens") or 0
     try:
-        r = requests.get(base + "/api/tags", timeout=8)
-        if r.status_code == 200:
-            for m in r.json().get("models", []):
-                n = m.get("name") or m.get("model")
-                if n:
-                    names.append(n)
+        s += math.log10(max(int(ctx), 1))
     except Exception:
         pass
-    if not names:
-        try:
-            r = requests.get(base + "/v1/models", timeout=8)
-            if r.status_code == 200:
-                for m in r.json().get("data", []):
-                    n = m.get("id")
-                    if n:
-                        names.append(n)
-        except Exception:
-            pass
-    return names
+    return round(s, 1)
 
-def auto_pick_models():
-    """.env da CHAT_MODEL/CODE_MODEL berilmagan bo'lsa, mavjud modellardan avtomatik tanlaydi"""
-    global CHAT_MODEL, CODE_MODEL
-    names = fetch_models()
-    if not names:
-        logger.warning("OmniRoute'dan modellar ro'yxati olinmadi — .env dagi qiymatlar ishlatiladi.")
-        return
-    logger.info(f"OmniRoute'dagi modellar: {names}")
-    if not os.getenv("CODE_MODEL"):
-        coder = next((n for n in names if "code" in n.lower() or "coder" in n.lower()), None)
-        CODE_MODEL = coder or names[0]
-    if not os.getenv("CHAT_MODEL"):
-        chat = next((n for n in names if n != CODE_MODEL), names[0])
-        CHAT_MODEL = chat
-    logger.info(f"Tanlangan modellar → CHAT_MODEL={CHAT_MODEL}  CODE_MODEL={CODE_MODEL}")
+def fetch_categorized_models():
+    base = _omni_base()
+    try:
+        r = requests.get(base + "/v1/models", timeout=10)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+    except Exception as e:
+        logger.warning(f"Modellar ro'yxati olinmadi: {e}")
+        return {}
+    cats = {}
+    for entry in data:
+        cat = categorize_entry(entry)
+        if not cat:
+            continue
+        mid = entry.get("id")
+        name = entry.get("name") or mid
+        if not mid:
+            continue
+        cats.setdefault(cat, []).append((score_entry(entry), mid, name))
+    for cat in cats:
+        cats[cat].sort(key=lambda x: x[0], reverse=True)
+    return cats
+
+def get_categorized_models(force=False):
+    now = time.time()
+    if force or now - _MODEL_CACHE["ts"] > 600 or not _MODEL_CACHE["data"]:
+        data = fetch_categorized_models()
+        if data:
+            _MODEL_CACHE["data"] = data
+            _MODEL_CACHE["ts"] = now
+    return _MODEL_CACHE["data"]
 
 # ============================================================
-# OmniRoute API — avtomatik format aniqlash + keshlash
+# OmniRoute API — format aniqlash, keshlash, avtomatik qayta urinish
 # ============================================================
 def _omni_ollama(prompt, system, model):
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
@@ -211,8 +230,7 @@ def _omni_ollama(prompt, system, model):
     headers = {"Content-Type": "application/json"}
     if OMNI_KEY and OMNI_KEY != "not-needed":
         headers["Authorization"] = f"Bearer {OMNI_KEY}"
-    url = _omni_base() + "/api/generate"
-    r = requests.post(url, json=payload, headers=headers, timeout=90)
+    r = requests.post(_omni_base() + "/api/generate", json=payload, headers=headers, timeout=90)
     r.raise_for_status()
     return r.json().get("response", "")
 
@@ -225,8 +243,7 @@ def _omni_openai(prompt, system, model):
     headers = {"Content-Type": "application/json"}
     if OMNI_KEY and OMNI_KEY != "not-needed":
         headers["Authorization"] = f"Bearer {OMNI_KEY}"
-    url = _omni_base() + "/v1/chat/completions"
-    r = requests.post(url, json=payload, headers=headers, timeout=90)
+    r = requests.post(_omni_base() + "/v1/chat/completions", json=payload, headers=headers, timeout=90)
     r.raise_for_status()
     data = r.json()
     if "choices" in data and len(data["choices"]) > 0:
@@ -234,33 +251,43 @@ def _omni_openai(prompt, system, model):
     return ""
 
 def omni_generate(prompt, system="", model=None):
-    """Avval keshlangan formatni sinaydi, muvaffaqiyatsiz bo'lsa ikkinchisiga o'tadi."""
-    model = model or CHAT_MODEL
+    """Keshlangan formatdan boshlaydi, tarmoq xatosida avtomatik qayta urinadi."""
+    model = model or CODE_MODEL
     order = ["ollama", "openai"]
     if _OMNI_FORMAT["mode"] == "openai":
         order = ["openai", "ollama"]
 
+    max_retries = 2
     errors = []
     for fmt in order:
-        try:
-            result = _omni_ollama(prompt, system, model) if fmt == "ollama" else _omni_openai(prompt, system, model)
-            _OMNI_FORMAT["mode"] = fmt  # keyingi safar to'g'ridan-to'g'ri shu formatdan boshlaymiz
-            return result
-        except requests.exceptions.HTTPError as e:
-            body = ""
+        for attempt in range(max_retries + 1):
             try:
-                body = e.response.text[:200]
-            except Exception:
-                pass
-            errors.append(f"{fmt} ({e.response.status_code}): {body}")
-        except Exception as e:
-            errors.append(f"{fmt}: {e}")
+                result = _omni_ollama(prompt, system, model) if fmt == "ollama" else _omni_openai(prompt, system, model)
+                _OMNI_FORMAT["mode"] = fmt
+                return result
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt < max_retries:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                errors.append(f"{fmt}: tarmoq xatosi ({e})")
+                break
+            except requests.exceptions.HTTPError as e:
+                body = ""
+                try:
+                    body = e.response.text[:200]
+                except Exception:
+                    pass
+                errors.append(f"{fmt} ({e.response.status_code}): {body}")
+                break
+            except Exception as e:
+                errors.append(f"{fmt}: {e}")
+                break
 
     raise Exception(
         "OmniRoute javob bermadi:\n" + "\n".join(f"• {x}" for x in errors) +
         f"\n\nModel: {model}\n"
-        f"Tekshiring: curl -s {_omni_base()}/api/tags\n"
-        f"Yoki: /model buyrug'i bilan model nomini tekshiring/almashtiring"
+        f"Tekshiring: curl -s {_omni_base()}/v1/models\n"
+        f"Yoki /model buyrug'i bilan boshqa model tanlang."
     )
 
 # ============================================================
@@ -277,22 +304,229 @@ def local_run(cmd, cwd=PROJECT_DIR, timeout=30):
         return f"❌ {e}"
 
 # ============================================================
-# Suhbat tarixi
+# /code — asosiy AI kod yozish oqimi (cancel + qayta yozish bilan)
 # ============================================================
-def load_chat(uid):
-    f = os.path.join(CHAT_DIR, f"{uid}.json")
-    try:
-        with open(f) as fh:
-            return json.load(fh)
-    except Exception:
-        return []
+async def run_code_generation(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str, uid: int):
+    LAST_PROMPT[uid] = prompt
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    status_msg = await update.effective_chat.send_message(
+        f"⏰ Kod yozilmoqda... (model: {CODE_MODEL})\nBekor qilish: /cancel"
+    )
 
-def save_chat(uid, conv):
-    f = os.path.join(CHAT_DIR, f"{uid}.json")
-    if len(conv) > MAX_HIST:
-        conv = conv[-MAX_HIST:]
-    with open(f, "w") as fh:
-        json.dump(conv, fh, indent=2)
+    system = "You are an expert programmer. Write clean, well-commented code. Use markdown code blocks with language identifier."
+    task = asyncio.create_task(asyncio.to_thread(omni_generate, f"Write code for: {prompt}", system, CODE_MODEL))
+    ACTIVE_TASKS[uid] = task
+    try:
+        ans = await task
+    except asyncio.CancelledError:
+        try:
+            await status_msg.edit_text("🛑 Bekor qilindi.")
+        except Exception:
+            pass
+        return
+    except Exception as e:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await update.effective_chat.send_message(f"❌ Xatolik:\n<pre>{str(e)[:600]}</pre>", parse_mode="HTML")
+        return
+    finally:
+        ACTIVE_TASKS.pop(uid, None)
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ext = detect_ext(ans)
+    fn = f"code_{ts}.{ext}"
+    fp = os.path.join(OUTPUT_DIR, fn)
+    header = f"# Vazifa: {prompt}\n# Vaqt: {datetime.now().isoformat()}\n# User: {uid}\n\n"
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(header + ans)
+
+    for i in range(0, len(ans), 3800):
+        try:
+            await update.effective_chat.send_message(ans[i:i + 3800], parse_mode="Markdown")
+        except BadRequest:
+            await update.effective_chat.send_message(ans[i:i + 3800])
+
+    regen_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔁 Qayta yoz", callback_data="regen")]])
+    with open(fp, "rb") as f:
+        await update.effective_chat.send_document(document=f, caption=f"📁 {fn}", reply_markup=regen_kb)
+
+    await notify_admins(context, f"📝 <b>Kod</b>\nUser: <code>{uid}</code>\n{prompt[:100]}")
+
+async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_authorized(u.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "❌ <b>Vazifa kiritilmadi!</b>\n\nFoydalanish:\n"
+            "<code>/code python telegram bot yoza oladimi</code>\n"
+            "<code>/code flask rest api</code>\n"
+            "<code>/code javascript calculator</code>",
+            parse_mode="HTML"
+        )
+        return
+    if u.id in ACTIVE_TASKS and not ACTIVE_TASKS[u.id].done():
+        await update.message.reply_text("⏳ Sizda allaqachon bajarilayotgan vazifa bor. Kuting yoki /cancel yuboring.")
+        return
+    prompt = " ".join(context.args)
+    await run_code_generation(update, context, prompt, u.id)
+
+async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_authorized(u.id):
+        return
+    task = ACTIVE_TASKS.get(u.id)
+    if task and not task.done():
+        task.cancel()
+        await update.message.reply_text("🛑 Bekor qilinmoqda...")
+    else:
+        await update.message.reply_text("Hozir faol vazifa yo'q.")
+
+async def regen_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    if not is_authorized(uid):
+        await q.answer()
+        return
+    prompt = LAST_PROMPT.get(uid)
+    if not prompt:
+        await q.answer("Eslab qolingan so'rov yo'q.", show_alert=True)
+        return
+    if uid in ACTIVE_TASKS and not ACTIVE_TASKS[uid].done():
+        await q.answer("Sizda allaqachon bajarilayotgan vazifa bor.", show_alert=True)
+        return
+    await q.answer("🔁 Qayta yozilmoqda...")
+    await run_code_generation(update, context, prompt, uid)
+
+# ============================================================
+# /model — kategoriya + ball asosida model tanlash
+# ============================================================
+async def show_category_menu(message_or_query, edit=False):
+    cats = get_categorized_models()
+    buttons = []
+    for i, cname in enumerate(CATEGORY_ORDER):
+        if cats.get(cname):
+            buttons.append([InlineKeyboardButton(f"{cname} ({len(cats[cname])})", callback_data=f"cat:{i}")])
+    buttons.append([InlineKeyboardButton("❌ Yopish", callback_data="cat:close")])
+    text = f"🤖 Joriy kod modeli:\n<code>{CODE_MODEL}</code>\n\nKategoriya tanlang:"
+    markup = InlineKeyboardMarkup(buttons)
+    if edit:
+        await message_or_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await message_or_query.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    await show_category_menu(update.message, edit=False)
+
+async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not is_admin(q.from_user.id):
+        await q.answer()
+        return
+    data = q.data
+    cats = get_categorized_models()
+
+    if data == "cat:close":
+        await q.answer()
+        await q.edit_message_text("Yopildi.")
+        return
+
+    if data == "cat:back":
+        await q.answer()
+        await show_category_menu(q, edit=True)
+        return
+
+    if data.startswith("cat:"):
+        await q.answer()
+        idx = int(data.split(":")[1])
+        cname = CATEGORY_ORDER[idx]
+        models = cats.get(cname, [])[:8]
+        buttons = []
+        for j, (score, mid, name) in enumerate(models):
+            label = f"{name} · {score}"
+            buttons.append([InlineKeyboardButton(label[:64], callback_data=f"mdl:{idx}:{j}")])
+        buttons.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="cat:back")])
+        await q.edit_message_text(
+            f"{cname} — eng yuqori ballilar:\n<i>(ball = reasoning/thinking/tool_calling/vision + kontekst)</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return
+
+    if data.startswith("mdl:"):
+        global CODE_MODEL
+        _, cidx, midx = data.split(":")
+        cname = CATEGORY_ORDER[int(cidx)]
+        models = cats.get(cname, [])
+        try:
+            score, mid, name = models[int(midx)]
+        except IndexError:
+            await q.answer("Model topilmadi, ro'yxat yangilangan bo'lishi mumkin.", show_alert=True)
+            return
+        CODE_MODEL = mid
+        await q.answer("✅ Model o'zgartirildi")
+        await q.edit_message_text(f"✅ Kod modeli o'zgartirildi:\n<b>{name}</b>\n<code>{mid}</code>", parse_mode="HTML")
+
+# ============================================================
+# /app — tezkor inline menyu
+# ============================================================
+async def app_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if not is_authorized(u.id):
+        return
+    buttons = [[InlineKeyboardButton("🤖 Model tanlash", callback_data="cat:menu")]]
+    if is_admin(u.id):
+        buttons.insert(0, [InlineKeyboardButton("📊 Status", callback_data="app:status")])
+    buttons.append([InlineKeyboardButton("💻 Kod yozish", callback_data="app:code")])
+    buttons.append([InlineKeyboardButton("ℹ️ Yordam", callback_data="app:help")])
+    await update.message.reply_text(
+        "📱 <b>VPS Buddy — Menyu</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+async def app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    if not is_authorized(uid):
+        await q.answer()
+        return
+    await q.answer()
+    if q.data == "app:status":
+        if not is_admin(uid):
+            return
+        text = build_status_text()
+        await q.edit_message_text(text, parse_mode="HTML")
+    elif q.data == "cat:menu":
+        await show_category_menu(q, edit=True)
+    elif q.data == "app:code":
+        await q.edit_message_text(
+            "💻 Kod yozish uchun:\n<code>/code vazifangiz</code>\n\nMisol: <code>/code flask rest api</code>",
+            parse_mode="HTML"
+        )
+    elif q.data == "app:help":
+        await q.edit_message_text(HELP_TEXT, parse_mode="HTML")
+
+# ============================================================
+# Callback marshrutizatori
+# ============================================================
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.callback_query.data or ""
+    if data == "regen":
+        await regen_callback(update, context)
+    elif data.startswith("app:") or data == "cat:menu":
+        await app_callback(update, context)
+    elif data.startswith("cat:") or data.startswith("mdl:"):
+        await model_callback(update, context)
+    else:
+        await update.callback_query.answer()
 
 # ============================================================
 # Buyruqlar
@@ -301,35 +535,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     if not is_authorized(u.id):
         await update.message.reply_text(
-            "🔒 <b>Bu bot yopiq.</b>\n\n"
-            "Kirish uchun kodni yuboring:\n"
-            "<code>/auth kodingiz</code>",
+            "🔒 <b>Bu bot yopiq.</b>\n\nKirish uchun kodni yuboring:\n<code>/auth kodingiz</code>",
             parse_mode="HTML"
         )
         await notify_admins(context, f"🔔 <b>Ruxsatsiz urinish</b>\nID: <code>{u.id}</code>\nIsm: {u.first_name}")
         return
-
-    cmds = (
-        "• /code &lt;vazifa&gt; — AI dan kod yozish\n"
-        "• /image &lt;tavsif&gt; — Rasm generatsiya\n"
-        "• /video &lt;tavsif&gt; — Video generatsiya\n"
-        "• /reset — Suhbat tarixini tozalash\n"
-    )
-    if is_admin(u.id):
-        cmds += (
-            "• /run &lt;buyruq&gt; — Shell buyruq\n"
-            "• /models — Mavjud modellar\n"
-            "• /model — Chat/code modelini ko'rish yoki almashtirish\n"
-            "• /status — VPS va OmniRoute holati\n"
-        )
-    cmds += "• /myid — ID ingiz\n• /stop — To'xtatish"
-
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
     await update.message.reply_text(
-        f"🤖 <b>VPS Buddy</b>\n\n📋 <b>Buyruqlar:</b>\n{cmds}\n\n💬 Shunchaki matn yuboring — AI suhbat",
-        parse_mode="HTML"
-    )
-    await update.message.reply_text(
-        "📝 <b>Kod yozishni xohlaysizmi?</b>\nMisol: <code>/code python telegram bot</code>",
+        "📝 <b>Kod yozishni xohlaysizmi?</b>\nMisol: <code>/code python telegram bot</code>\n\n"
+        "Yoki <code>/app</code> — tezkor menyu",
         parse_mode="HTML"
     )
     await notify_admins(context, f"🔔 <b>Foydalanuvchi /start bosdi</b>\nID: <code>{u.id}</code>\nIsm: {u.first_name}")
@@ -358,143 +572,6 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u.username:
         t += f"\n@{u.username}"
     await update.message.reply_text(t, parse_mode="HTML")
-
-async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if not is_authorized(u.id):
-        return
-    f = os.path.join(CHAT_DIR, f"{u.id}.json")
-    try:
-        os.remove(f)
-    except Exception:
-        pass
-    await update.message.reply_text("🔄 Suhbat tarixi tozalandi.")
-
-async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if not is_authorized(u.id):
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "❌ <b>Vazifa kiritilmadi!</b>\n\nFoydalanish:\n"
-            "<code>/code python telegram bot yoza oladimi</code>\n"
-            "<code>/code flask rest api</code>\n"
-            "<code>/code javascript calculator</code>",
-            parse_mode="HTML"
-        )
-        return
-    prompt = " ".join(context.args)
-    await update.message.chat.send_action(ChatAction.TYPING)
-    await update.message.reply_text(f"⏰ Kod yozilmoqda... (model: {CODE_MODEL})")
-    try:
-        system = "You are an expert programmer. Write clean, well-commented code. Use markdown code blocks with language identifier."
-        # /code buyrug'i har doim CODE_MODEL ga (kod yozishga ixtisoslashgan modelga) yo'naltiriladi
-        ans = omni_generate(f"Write code for: {prompt}", system, model=CODE_MODEL)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Xatolik:\n<pre>{str(e)[:600]}</pre>", parse_mode="HTML")
-        return
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    ext = detect_ext(ans)
-    fn = f"code_{ts}.{ext}"
-    fp = os.path.join(OUTPUT_DIR, fn)
-    header = f"# Vazifa: {prompt}\n# Vaqt: {datetime.now().isoformat()}\n# User: {u.id}\n\n"
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(header + ans)
-    await send_long(update, f"✅ Kod tayyor!\n\n{ans}")
-    with open(fp, "rb") as f:
-        await update.message.reply_document(document=f, caption=f"📁 {fn}")
-    await notify_admins(context, f"📝 <b>Kod</b>\nUser: <code>{u.id}</code>\n{prompt[:100]}")
-
-async def image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if not is_authorized(u.id):
-        return
-    if not IMAGE_MODEL:
-        await update.message.reply_text(
-            "🖼 <b>Rasm generatsiya sozlanmagan.</b>\n\n"
-            "1) OmniRoute'da rasm modeli borligini tekshiring:\n"
-            f"<code>curl -s {_omni_base()}/v1/models</code>\n"
-            "2) .env fayliga qo'shing: <code>IMAGE_MODEL=model_nomi</code>\n"
-            "3) Botni qayta ishga tushiring.",
-            parse_mode="HTML"
-        )
-        return
-    if not context.args:
-        await update.message.reply_text("Foydalanish: <code>/image mushukning tasviri</code>", parse_mode="HTML")
-        return
-    prompt = " ".join(context.args)
-    await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-    await update.message.reply_text("🎨 Chizyapman...")
-    try:
-        r = requests.post(
-            _omni_base() + "/v1/images/generations",
-            json={"model": IMAGE_MODEL, "prompt": prompt, "n": 1},
-            timeout=120
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            raise Exception("Bo'sh javob qaytdi")
-        item = data[0]
-        if "url" in item:
-            await update.message.reply_photo(item["url"], caption=f"🖼 {prompt[:200]}")
-        elif "b64_json" in item:
-            img_bytes = base64.b64decode(item["b64_json"])
-            await update.message.reply_photo(img_bytes, caption=f"🖼 {prompt[:200]}")
-        else:
-            raise Exception("Noma'lum javob formati")
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Rasm generatsiya xatosi:\n<pre>{str(e)[:400]}</pre>\n\n"
-            f"OmniRoute'da <code>/v1/images/generations</code> endpointi va "
-            f"<code>{IMAGE_MODEL}</code> modeli mavjudligini tekshiring.",
-            parse_mode="HTML"
-        )
-
-async def video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if not is_authorized(u.id):
-        return
-    if not VIDEO_MODEL:
-        await update.message.reply_text(
-            "🎬 <b>Video generatsiya sozlanmagan.</b>\n\n"
-            "OmniRoute'ning ko'pchilik o'rnatishlarida video generatsiya yo'q — "
-            "avval mavjudligini tekshiring:\n"
-            f"<code>curl -s {_omni_base()}/v1/models</code>\n"
-            "Bo'lsa, .env ga <code>VIDEO_MODEL=model_nomi</code> qo'shing.",
-            parse_mode="HTML"
-        )
-        return
-    if not context.args:
-        await update.message.reply_text("Foydalanish: <code>/video mushuk yugurayapti</code>", parse_mode="HTML")
-        return
-    prompt = " ".join(context.args)
-    await update.message.chat.send_action(ChatAction.UPLOAD_VIDEO)
-    await update.message.reply_text("🎬 Video tayyorlanmoqda, bu biroz vaqt olishi mumkin...")
-    try:
-        r = requests.post(
-            _omni_base() + "/v1/videos/generations",
-            json={"model": VIDEO_MODEL, "prompt": prompt},
-            timeout=300
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            raise Exception("Bo'sh javob qaytdi")
-        item = data[0]
-        if "url" in item:
-            await update.message.reply_video(item["url"], caption=f"🎬 {prompt[:200]}")
-        elif "b64_json" in item:
-            vid_bytes = base64.b64decode(item["b64_json"])
-            await update.message.reply_video(vid_bytes, caption=f"🎬 {prompt[:200]}")
-        else:
-            raise Exception("Noma'lum javob formati")
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Video generatsiya xatosi:\n<pre>{str(e)[:400]}</pre>\n\n"
-            f"OmniRoute bu funksiyani qo'llab-quvvatlamasligi mumkin.",
-            parse_mode="HTML"
-        )
 
 async def run_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
@@ -531,47 +608,23 @@ async def models_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     await update.message.reply_text("⏰ Yuklanmoqda...")
-    names = fetch_models()
-    if names:
-        t = f"🤖 <b>Modellar ({len(names)} ta):</b>\n\n"
-        for n in names[:50]:
-            t += f"• <code>{n}</code>\n"
-        if len(names) > 50:
-            t += f"\n... va yana {len(names) - 50} ta"
-        t += f"\n\nJoriy: chat=<code>{CHAT_MODEL}</code>, code=<code>{CODE_MODEL}</code>"
-    else:
-        t = "❌ Model ro'yxati olinmadi (/api/tags va /v1/models ikkalasi ham ishlamadi)."
+    cats = get_categorized_models(force=True)
+    if not cats:
+        await update.message.reply_text("❌ Model ro'yxati olinmadi.")
+        return
+    total = sum(len(v) for v in cats.values())
+    t = f"🤖 <b>Modellar ({total} ta, {len(cats)} kategoriya):</b>\n\n"
+    for cname in CATEGORY_ORDER:
+        if cname in cats:
+            top = cats[cname][:3]
+            t += f"<b>{cname}</b> ({len(cats[cname])} ta)\n"
+            for score, mid, name in top:
+                t += f"  • {name} <code>{score}</code>\n"
+            t += "\n"
+    t += f"Joriy kod modeli: <code>{CODE_MODEL}</code>\nBatafsil tanlash uchun: /model"
     await update.message.reply_text(t, parse_mode="HTML")
 
-async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Chat/code uchun ishlatiladigan modelni ko'rish yoki almashtirish (admin)"""
-    if not is_admin(update.effective_user.id):
-        return
-    global CHAT_MODEL, CODE_MODEL
-    if not context.args:
-        await update.message.reply_text(
-            f"🤖 Chat model: <code>{CHAT_MODEL}</code>\n"
-            f"💻 Code model: <code>{CODE_MODEL}</code>\n\n"
-            f"Almashtirish: <code>/model chat nom</code> yoki <code>/model code nom</code>",
-            parse_mode="HTML"
-        )
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Foydalanish: <code>/model chat qwen2.5</code>", parse_mode="HTML")
-        return
-    kind, name = context.args[0].lower(), " ".join(context.args[1:])
-    if kind == "chat":
-        CHAT_MODEL = name
-    elif kind == "code":
-        CODE_MODEL = name
-    else:
-        await update.message.reply_text("Birinchi so'z 'chat' yoki 'code' bo'lishi kerak.")
-        return
-    await update.message.reply_text(f"✅ {kind} model o'zgartirildi: <code>{name}</code>", parse_mode="HTML")
-
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
+def build_status_text():
     try:
         load = os.getloadavg()
         ls = f"{load[0]:.2f} {load[1]:.2f} {load[2]:.2f}"
@@ -585,74 +638,59 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mem = local_run("free -h", timeout=5)
     base_url = _omni_base()
     omni_status = "❌"
-    omni_detail = ""
-    try:
-        r = requests.get(base_url + "/api/tags", timeout=5)
-        if r.status_code == 200:
-            omni_status = "✅ Ollama (/api/tags)"
-    except Exception:
-        pass
     try:
         r = requests.get(base_url + "/v1/models", timeout=5)
         if r.status_code == 200:
             omni_status = "✅ OpenAI (/v1/models)"
     except Exception:
         pass
-    try:
-        r = requests.post(base_url + "/api/generate", json={"model": "test"}, timeout=5)
-        omni_detail += "\n✅ /api/generate mavjud" if r.status_code != 404 else "\n❌ /api/generate 404"
-    except Exception:
-        omni_detail += "\n❌ /api/generate ulanmadi"
-    try:
-        r = requests.post(base_url + "/v1/chat/completions", json={"model": "test"}, timeout=5)
-        omni_detail += "\n✅ /v1/chat/completions mavjud" if r.status_code != 404 else "\n❌ /v1/chat/completions 404"
-    except Exception:
-        omni_detail += "\n❌ /v1/chat/completions ulanmadi"
+    health = _OMNI_HEALTH["up"]
+    health_text = "✅ ishlayapti" if health else ("❌ javob bermayapti" if health is False else "⏳ hali tekshirilmadi")
 
-    await update.message.reply_text(
+    return (
         f"📊 <b>VPS Status</b>\n"
         f"⚡ Load: {ls}\n"
         f"💾 Disk: {ds}\n"
         f"📝 Xotira:\n<pre>{mem}</pre>\n\n"
         f"🔗 <b>OmniRoute:</b> {omni_status}\n"
-        f"🤖 Chat model: <code>{CHAT_MODEL}</code>\n"
-        f"💻 Code model: <code>{CODE_MODEL}</code>\n"
-        f"🖼 Image model: <code>{IMAGE_MODEL or 'sozlanmagan'}</code>\n"
-        f"🎬 Video model: <code>{VIDEO_MODEL or 'sozlanmagan'}</code>\n"
-        f"📡 Endpointlar:{omni_detail}\n"
-        f"🔐 Kesh: format=<code>{_OMNI_FORMAT['mode'] or 'aniqlanmagan'}</code>",
-        parse_mode="HTML"
+        f"❤️ Health-check: {health_text}\n"
+        f"💻 Kod modeli: <code>{CODE_MODEL}</code>\n"
+        f"🔐 Format kesh: <code>{_OMNI_FORMAT['mode'] or 'aniqlanmagan'}</code>"
     )
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(build_status_text(), parse_mode="HTML")
 
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     await update.message.reply_text("🛑 To'xtatildi.")
 
-async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    if not is_authorized(u.id):
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
         return
-    if not update.message or not update.message.text or update.message.text.startswith("/"):
-        return
-    msg = update.message.text
-    await update.message.chat.send_action(ChatAction.TYPING)
-    await update.message.reply_text("⏰ O'ylayapman...")
-    conv = load_chat(u.id)
-    conv.append({"role": "user", "content": msg})
-    history = "\n".join([
-        f"{'User' if c['role'] == 'user' else 'AI'}: {c['content']}"
-        for c in conv[-MAX_HIST:]
-    ])
-    prompt = f"You are VPS Buddy, helpful AI on a VPS. Be concise.\n\n{history}\nAI:"
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
+
+# ============================================================
+# OmniRoute Health-check (fon vazifasi)
+# ============================================================
+async def health_check_job(context: ContextTypes.DEFAULT_TYPE):
+    base = _omni_base()
+    up = False
     try:
-        # Oddiy suhbat har doim CHAT_MODEL ga (chatni yaxshi tushunadigan modelga) yo'naltiriladi
-        ans = omni_generate(prompt, model=CHAT_MODEL)
-        conv.append({"role": "assistant", "content": ans})
-        save_chat(u.id, conv)
-        await send_long(update, ans)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Xatolik:\n<pre>{str(e)[:800]}</pre>", parse_mode="HTML")
+        r = requests.get(base + "/v1/models", timeout=8)
+        up = (r.status_code == 200)
+    except Exception:
+        up = False
+    prev = _OMNI_HEALTH["up"]
+    if prev is not None and prev != up:
+        if up:
+            await notify_admins(context, "✅ <b>OmniRoute qayta ishga tushdi.</b>")
+        else:
+            await notify_admins(context, "🚨 <b>OmniRoute javob bermayapti!</b>")
+    _OMNI_HEALTH["up"] = up
 
 # ============================================================
 # Xatoliklarni ushlash
@@ -678,30 +716,31 @@ def main():
         logger.error("BOT_TOKEN sozlanmagan!")
         sys.exit(1)
 
-    try:
-        auto_pick_models()
-    except Exception as e:
-        logger.warning(f"Model avto-aniqlash muvaffaqiyatsiz: {e}")
-
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("auth", auth_cmd))
     app.add_handler(CommandHandler("myid", myid))
-    app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("code", code_cmd))
-    app.add_handler(CommandHandler("image", image_cmd))
-    app.add_handler(CommandHandler("video", video_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_cmd))
+    app.add_handler(CommandHandler("model", model_cmd))
+    app.add_handler(CommandHandler("app", app_cmd))
     app.add_handler(CommandHandler("run", run_cmd))
     app.add_handler(CommandHandler("models", models_cmd))
-    app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("stop", stop_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
+    app.add_handler(CallbackQueryHandler(callback_router))
     app.add_error_handler(error_handler)
 
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(health_check_job, interval=300, first=30)
+    else:
+        logger.warning("JobQueue mavjud emas — health-check o'chirilgan. "
+                        "O'rnatish: pip install \"python-telegram-bot[job-queue]\"")
+
     logger.info("Bot ishga tushdi... (PID: %s)", os.getpid())
-    logger.info(f"CHAT_MODEL={CHAT_MODEL}  CODE_MODEL={CODE_MODEL}")
+    logger.info(f"CODE_MODEL={CODE_MODEL}")
     app.run_polling()
 
 if __name__ == "__main__":
