@@ -26,7 +26,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID_RAW = os.getenv("ADMIN_ID")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 AI_BASE_URL = "https://punctured-old-playmaker.ngrok-free.dev/v1"
@@ -37,10 +36,8 @@ DB_PATH = "memory.db"
 if ADMIN_PASSWORD != "Yil-2002":
     raise SystemExit("ADMIN_PASSWORD .env da 'Yil-2002' bo'lishi shart!")
 
-if not BOT_TOKEN or not ADMIN_ID_RAW:
-    raise SystemExit("BOT_TOKEN va ADMIN_ID .env da ko'rsatilishi shart!")
-
-ADMIN_ID = int(ADMIN_ID_RAW)
+if not BOT_TOKEN:
+    raise SystemExit("BOT_TOKEN .env da ko'rsatilishi shart!")
 
 
 # ============== SQLITE BAZA ==============
@@ -151,14 +148,8 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
-def is_admin(event) -> bool:
-    return event.from_user.id == ADMIN_ID
-
-
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    if not is_admin(message):
-        return
     await message.answer(
         "👋 Bot ishga tushdi.\n\n"
         "✍️ Suhbatlashish uchun xabar yozing.\n"
@@ -168,8 +159,6 @@ async def cmd_start(message: Message):
 
 @dp.message(Command("xotira"))
 async def cmd_memory(message: Message):
-    if not is_admin(message):
-        return
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📥 Yuklash", callback_data="download_memory")]
@@ -180,10 +169,6 @@ async def cmd_memory(message: Message):
 
 @dp.callback_query(F.data == "download_memory")
 async def download_memory(callback: CallbackQuery):
-    if not is_admin(callback):
-        await callback.answer("⛔ Ruxsat yo'q!", show_alert=True)
-        return
-
     await callback.answer()
 
     memory_text = get_memory()
@@ -203,9 +188,6 @@ async def download_memory(callback: CallbackQuery):
 
 @dp.message(F.text)
 async def handle_message(message: Message):
-    if not is_admin(message):
-        return
-
     user_text = message.text
     old_memory = get_memory()
 
@@ -252,7 +234,7 @@ async def _background_compress_and_save(
 # ============== MAIN ==============
 async def main():
     init_db()
-    print(f"✅ Bot ishga tushdi. Admin ID: {ADMIN_ID}")
+    print("✅ Bot ishga tushdi.")
     await dp.start_polling(bot)
 
 
