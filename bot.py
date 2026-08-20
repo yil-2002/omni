@@ -9,6 +9,9 @@ import os
 import asyncio
 import sqlite3
 import json as json_mod
+import subprocess
+import shlex
+import re
 from datetime import datetime
 
 import aiohttp
@@ -90,7 +93,7 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
         "model": AI_MODEL,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
         "stream": False,
     }
 
@@ -101,18 +104,37 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
             text = await resp.text()
             if resp.status != 200:
                 raise RuntimeError(f"AI API xato {resp.status}: {text[:500]}")
+
+            # Try regular JSON first
             try:
                 data = json_mod.loads(text)
+                return data["choices"][0]["message"]["content"].strip()
             except json_mod.JSONDecodeError:
-                # SSE formatdan JSON ni ajratib olish
-                for line in text.split("\n"):
-                    line = line.strip()
-                    if line.startswith("data: "):
-                        data = json_mod.loads(line[6:])
+                pass
+
+            # Parse SSE format
+            full_content = ""
+            for line in text.split("\n"):
+                line = line.strip()
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str == "[DONE]":
                         break
-                else:
-                    raise RuntimeError(f"JSON parse xato: {text[:500]}")
-            return data["choices"][0]["message"]["content"].strip()
+                    try:
+                        chunk = json_mod.loads(data_str)
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            choice = chunk["choices"][0]
+                            if "delta" in choice and "content" in choice["delta"]:
+                                full_content += choice["delta"]["content"]
+                            elif "message" in choice and "content" in choice["message"]:
+                                full_content += choice["message"]["content"]
+                    except:
+                        continue
+
+            if full_content:
+                return full_content.strip()
+
+            raise RuntimeError(f"Javobni tushunish mumkin emas: {text[:500]}")
 
 
 async def compress_memory(old_memory: str, user_msg: str, assistant_msg: str) -> str:
@@ -139,6 +161,187 @@ async def compress_memory(old_memory: str, user_msg: str, assistant_msg: str) ->
         {"role": "user", "content": prompt},
     ]
     return await ai_chat(messages, temperature=0.3)
+
+
+# ============== VPS TOOL'LARI ==============
+async def tool_read_file(path: str) -> str:
+    try:
+        if not os.path.exists(path):
+            return f"❌ Fayl topilmadi: {path}"
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        if len(content) > 8000:
+            content = content[:8000] + "\n\n... (fayl juda katta, qisqartirildi)"
+        return f"📄 {path}:\n```\n{content}\n```"
+    except Exception as e:
+        return f"❌ Xato: {e}"
+
+
+async def tool_write_file(path: str, content: str) -> str:
+    try:
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"✅ {path} ga yozildi ({len(content)} belgi)"
+    except Exception as e:
+        return f"❌ Xato: {e}"
+
+
+async def tool_execute_shell(command: str) -> str:
+    try:
+        dangerous = ["rm -rf /", "mkfs.", ":(){ :|:& };:", "dd if=/dev/zero", "> /dev/sda"]
+        for d in dangerous:
+            if d in command:
+                return "🚫 Xavfli buyruq bloklandi!"
+
+        result = subprocess.run(
+            command, shell=True, capture_output=True, 
+            text=True, timeout=60, cwd="/root"
+        )
+        output = result.stdout
+        if result.stderr:
+            output += f"\n\nSTDERR:\n{result.stderr}"
+        if len(output) > 6000:
+            output = output[:6000] + "\n\n... (natija qisqartirildi)"
+        return output if output.strip() else "✅ Buyruq muvaffaqiyatli bajarildi (bo'sh natija)"
+    except subprocess.TimeoutExpired:
+        return "⏰ Buyruq 60 soniyada bajarilmadi"
+    except Exception as e:
+        return f"❌ Xato: {e}"
+
+
+async def tool_list_files(path: str = ".") -> str:
+    try:
+        result = subprocess.run(
+            f"ls -lah {shlex.quote(path)}", 
+            shell=True, capture_output=True, text=True, timeout=10
+        )
+        return result.stdout if result.stdout else result.stderr
+    except Exception as e:
+        return f"❌ Xato: {e}"
+
+
+async def tool_search_code(path: str, pattern: str) -> str:
+    try:
+        result = subprocess.run(
+            f"grep -rn {shlex.quote(pattern)} {shlex.quote(path)} 2>/dev/null | head -30",
+            shell=True, capture_output=True, text=True, timeout=15
+        )
+        return result.stdout if result.stdout else "Hech narsa topilmadi"
+    except Exception as e:
+        return f"❌ Xato: {e}"
+
+
+# ============== AGENT SYSTEM ==============
+AGENT_SYSTEM_PROMPT = """Siz "OmniAgent" avtonom VPS yordamchisisiz. Foydalanuvchi topshirig'ini VPS ichida bajarish uchun tool'lardan foydalanasiz.
+
+SIZNING TOOL'LARINGIZ (har bir javobda FAQAT BITTA tool ishlating):
+
+1. read_file - Faylni o'qish
+   FORMAT: {"tool": "read_file", "path": "/root/speedpro/bot.py"}
+
+2. write_file - Faylga yozish
+   FORMAT: {"tool": "write_file", "path": "/root/speedpro/bot.py", "content": "import os\n..."}
+
+3. execute_shell - Shell buyruqni bajarish
+   FORMAT: {"tool": "execute_shell", "command": "ls -la /root/speedpro"}
+
+4. list_files - Fayllar ro'yxatini ko'rish
+   FORMAT: {"tool": "list_files", "path": "/root/speedpro"}
+
+5. search_code - Kod ichidan qidirish
+   FORMAT: {"tool": "search_code", "path": "/root/speedpro", "pattern": "def main"}
+
+QOIDALAR:
+- Har bir javobda FAQAT BITTA JSON obyekt bo'lishi kerak
+- Agar vazifa tugagan bo'lsa, {"done": true, "answer": "yakuniy xabar"} formatida javob bering
+- write_file da content ichida \\n yangi qatorni anglatadi
+- Xavfsizlik: rm -rf / kabi buyruqlarni BAJARMAGAN BO'LING
+- Avval faylni o'qing, keyin tahlil qiling, keyin tuzating
+- Har bir qadamda nima qilayotganingizni tushuntiring (THOUGHT: ... bilan boshlang)
+
+SIZNING XOTIRANGIZ:
+"""
+
+
+async def agent_execute(chat_id: int, user_request: str, memory: str) -> str:
+    system_msg = AGENT_SYSTEM_PROMPT + (memory if memory else "[Bo'sh]")
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": f"TOPSHIRIQ: {user_request}\n\nIltimos, THOUGHT bilan boshlang va keyin JSON formatida action bajaring."}
+    ]
+
+    max_steps = 15
+    step = 0
+    logs = []
+
+    while step < max_steps:
+        step += 1
+        try:
+            response = await ai_chat(messages, temperature=0.2)
+        except Exception as e:
+            return f"❌ AI bilan bog'lanishda xato: {e}\n\nBajarilgan qadamlar:\n" + "\n".join(logs)
+
+        logs.append(f"\n--- Qadam {step} ---")
+        logs.append(response[:500])
+
+        # Extract JSON from response
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if not json_match:
+            logs.append("(JSON topilmadi, yakuniy javob sifatida qabul qilindi)")
+            return f"✅ Agent javobi ({step} qadam):\n\n{response}\n\n---\nBajarilgan qadamlar:\n" + "\n".join(logs)
+
+        try:
+            data = json_mod.loads(json_match.group())
+        except:
+            logs.append("(JSON parse xatosi)")
+            return f"⚠️ Agent to'xtadi ({step} qadam)\n\n{response[:1000]}\n\n---\nBajarilgan qadamlar:\n" + "\n".join(logs)
+
+        # Check if done
+        if data.get("done"):
+            answer = data.get("answer", "Vazifa tugallandi")
+            return f"✅ Vazifa tugallandi ({step} qadam)\n\n📋 NATIJA:\n{answer}\n\n---\nBajarilgan qadamlar:\n" + "\n".join(logs)
+
+        # Execute tool
+        tool_name = data.get("tool")
+        params = data
+
+        if tool_name == "read_file":
+            result = await tool_read_file(params.get("path", ""))
+        elif tool_name == "write_file":
+            result = await tool_write_file(params.get("path", ""), params.get("content", ""))
+        elif tool_name == "execute_shell":
+            result = await tool_execute_shell(params.get("command", ""))
+        elif tool_name == "list_files":
+            result = await tool_list_files(params.get("path", "."))
+        elif tool_name == "search_code":
+            result = await tool_search_code(params.get("path", ""), params.get("pattern", ""))
+        else:
+            result = f"❌ Noma'lum tool: {tool_name}"
+
+        logs.append(f"🔧 Natija: {result[:300]}...")
+
+        messages.append({"role": "assistant", "content": response})
+        messages.append({
+            "role": "user", 
+            "content": f"TOOL NATIJASI:\n{result}\n\nDavom eting. Agar vazifa tugagan bo'lsa {{'done': true, 'answer': '...'}} formatida javob bering."
+        })
+
+    return f"⚠️ {max_steps} qadamdan oshib ketdi.\n\nBajarilganlar:\n" + "\n".join(logs)
+
+
+# ============== YORDAMCHI ==============
+async def send_long_message(message: Message, text: str):
+    if len(text) <= 4096:
+        await message.answer(text)
+    else:
+        filename = f"result_{datetime.now().strftime('%H%M%S')}.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(text)
+        await message.answer_document(FSInputFile(filename), caption="📄 Natija juda uzun")
+        os.remove(filename)
 
 
 # ============== VPS BOSHQARUV SKILL'LARI (PLACEHOLDER) ==============
@@ -174,7 +377,11 @@ async def cmd_start(message: Message):
         return
     await message.answer(
         "👋 Xush kelibsiz!\n\n"
-        "✍️ Suhbatlashish uchun xabar yozing."
+        "✍️ Suhbatlashish uchun xabar yozing.\n"
+        "🤖 Agent rejimi: 'speedpro bot ni tekshir va tuzat' deb yozing\n"
+        "📁 /fayl <yo'l> - faylni o'qish\n"
+        "💻 /buyruq <command> - shell buyruq\n"
+        "🔍 /qidir <yo'l> <pattern> - kod qidirish"
     )
 
 
@@ -214,6 +421,46 @@ async def download_memory(callback: CallbackQuery):
     os.remove(filename)
 
 
+@dp.message(Command("fayl"))
+async def cmd_file(message: Message):
+    if not is_authenticated(message.chat.id):
+        await message.answer("🔐 Avval parolni kiriting:")
+        return
+    args = message.text.split(" ", 1)
+    if len(args) < 2:
+        await message.answer("📁 Foydalanish: /fayl <yo'l>\nMasalan: /fayl /root/speedpro/bot.py")
+        return
+    result = await tool_read_file(args[1])
+    await send_long_message(message, result)
+
+
+@dp.message(Command("buyruq"))
+async def cmd_shell(message: Message):
+    if not is_authenticated(message.chat.id):
+        await message.answer("🔐 Avval parolni kiriting:")
+        return
+    args = message.text.split(" ", 1)
+    if len(args) < 2:
+        await message.answer("💻 Foydalanish: /buyruq <command>\nMasalan: /buyruq ls -la")
+        return
+    await message.answer("⏳ Buyruq bajarilmoqda...")
+    result = await tool_execute_shell(args[1])
+    await send_long_message(message, result)
+
+
+@dp.message(Command("qidir"))
+async def cmd_search(message: Message):
+    if not is_authenticated(message.chat.id):
+        await message.answer("🔐 Avval parolni kiriting:")
+        return
+    args = message.text.split(" ", 2)
+    if len(args) < 3:
+        await message.answer("🔍 Foydalanish: /qidir <yo'l> <pattern>\nMasalan: /qidir /root/speedpro def main")
+        return
+    result = await tool_search_code(args[1], args[2])
+    await send_long_message(message, result)
+
+
 @dp.message(F.text)
 async def handle_message(message: Message):
     chat_id = message.chat.id
@@ -225,7 +472,11 @@ async def handle_message(message: Message):
             authenticated_chats.add(chat_id)
             await message.answer(
                 "✅ Parol tasdiqlandi!\n\n"
-                "✍️ Suhbatlashish uchun xabar yozing."
+                "✍️ Suhbatlashish uchun xabar yozing.\n"
+                "🤖 Agent rejimi: 'speedpro bot ni tekshir va tuzat'\n"
+                "📁 /fayl <yo'l> - faylni o'qish\n"
+                "💻 /buyruq <command> - shell buyruq\n"
+                "🔍 /qidir <yo'l> <pattern> - kod qidirish"
             )
         else:
             await message.answer("❌ Noto'g'ri parol. Qayta urinib ko'ring:")
@@ -233,10 +484,25 @@ async def handle_message(message: Message):
 
     old_memory = get_memory()
 
-    if old_memory:
-        mem_block = old_memory
-    else:
-        mem_block = "[Hali xotira yo'q]"
+    # Agent rejimini tekshirish
+    agent_keywords = ["tekshir", "tuzat", "xatoni top", "fix", "debug", "bajar", "yozib ber", "yarat", "yangil", "update", "o'qib ber"]
+    is_agent_request = any(kw in user_text.lower() for kw in agent_keywords) and len(user_text) > 10
+
+    if is_agent_request:
+        await message.answer("🤖 Agent ishga tushdi. Bu bir necha daqiqa olishi mumkin...")
+        try:
+            result = await agent_execute(chat_id, user_text, old_memory)
+            await send_long_message(message, result)
+
+            asyncio.create_task(
+                _background_compress_and_save(old_memory, user_text, result)
+            )
+        except Exception as e:
+            await message.answer(f"❌ Agent xatosi: {e}")
+        return
+
+    # Oddiy suhbat
+    mem_block = old_memory if old_memory else "[Hali xotira yo'q]"
 
     system_prompt = (
         "Siz foydalanuvchining shaxsiy yordamchisisiz. "
@@ -255,7 +521,7 @@ async def handle_message(message: Message):
         await message.answer(f"❌ AI xatolik: {e}")
         return
 
-    await message.answer(assistant_text)
+    await send_long_message(message, assistant_text)
 
     asyncio.create_task(
         _background_compress_and_save(old_memory, user_text, assistant_text)
