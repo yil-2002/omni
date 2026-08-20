@@ -8,6 +8,7 @@ Requirements:
 import os
 import asyncio
 import sqlite3
+import json as json_mod
 from datetime import datetime
 
 import aiohttp
@@ -38,6 +39,13 @@ if ADMIN_PASSWORD != "Yil-2002":
 
 if not BOT_TOKEN:
     raise SystemExit("BOT_TOKEN .env da ko'rsatilishi shart!")
+
+# ============== AUTH ==============
+authenticated_chats = set()
+
+
+def is_authenticated(chat_id: int) -> bool:
+    return chat_id in authenticated_chats
 
 
 # ============== SQLITE BAZA ==============
@@ -83,16 +91,27 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
         "messages": messages,
         "temperature": temperature,
         "max_tokens": 2000,
+        "stream": False,
     }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{AI_BASE_URL}/chat/completions", headers=headers, json=payload
         ) as resp:
+            text = await resp.text()
             if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(f"AI API xato {resp.status}: {body}")
-            data = await resp.json()
+                raise RuntimeError(f"AI API xato {resp.status}: {text[:500]}")
+            try:
+                data = json_mod.loads(text)
+            except json_mod.JSONDecodeError:
+                # SSE formatdan JSON ni ajratib olish
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        data = json_mod.loads(line[6:])
+                        break
+                else:
+                    raise RuntimeError(f"JSON parse xato: {text[:500]}")
             return data["choices"][0]["message"]["content"].strip()
 
 
@@ -150,15 +169,20 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    if not is_authenticated(message.chat.id):
+        await message.answer("🔐 Botdan foydalanish uchun parolni kiriting:")
+        return
     await message.answer(
-        "👋 Bot ishga tushdi.\n\n"
-        "✍️ Suhbatlashish uchun xabar yozing.\n"
-        "🧠 Xotirani ko'rish/yuklash uchun /xotira"
+        "👋 Xush kelibsiz!\n\n"
+        "✍️ Suhbatlashish uchun xabar yozing."
     )
 
 
 @dp.message(Command("xotira"))
 async def cmd_memory(message: Message):
+    if not is_authenticated(message.chat.id):
+        await message.answer("🔐 Avval parolni kiriting:")
+        return
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📥 Yuklash", callback_data="download_memory")]
@@ -169,6 +193,10 @@ async def cmd_memory(message: Message):
 
 @dp.callback_query(F.data == "download_memory")
 async def download_memory(callback: CallbackQuery):
+    if not is_authenticated(callback.message.chat.id):
+        await callback.answer("🔐 Avval parolni kiriting!", show_alert=True)
+        return
+
     await callback.answer()
 
     memory_text = get_memory()
@@ -188,7 +216,21 @@ async def download_memory(callback: CallbackQuery):
 
 @dp.message(F.text)
 async def handle_message(message: Message):
+    chat_id = message.chat.id
     user_text = message.text
+
+    # Parol tekshiruvi
+    if not is_authenticated(chat_id):
+        if user_text == ADMIN_PASSWORD:
+            authenticated_chats.add(chat_id)
+            await message.answer(
+                "✅ Parol tasdiqlandi!\n\n"
+                "✍️ Suhbatlashish uchun xabar yozing."
+            )
+        else:
+            await message.answer("❌ Noto'g'ri parol. Qayta urinib ko'ring:")
+        return
+
     old_memory = get_memory()
 
     if old_memory:
