@@ -35,19 +35,17 @@ AI_MODEL = "openai/gpt-oss-120b"
 AI_API_KEY = os.getenv("AI_API_KEY", "not-needed")
 DB_PATH = "memory.db"
 
-# Xavfsizlik: ADMIN_PASSWORD faqat "Yil-2002" bo'lganda bot ishga tushadi
 if ADMIN_PASSWORD != "Yil-2002":
-    raise SystemExit("❌ XATOLIK: ADMIN_PASSWORD .env da 'Yil-2002' bo'lishi shart!")
+    raise SystemExit("ADMIN_PASSWORD .env da 'Yil-2002' bo'lishi shart!")
 
 if not BOT_TOKEN or not ADMIN_ID_RAW:
-    raise SystemExit("❌ XATOLIK: BOT_TOKEN va ADMIN_ID .env da ko'rsatilishi shart!")
+    raise SystemExit("BOT_TOKEN va ADMIN_ID .env da ko'rsatilishi shart!")
 
 ADMIN_ID = int(ADMIN_ID_RAW)
 
 
-# ============== SQLITE BAZA (ZICHLANGAN XOTIRA) ==============
+# ============== SQLITE BAZA ==============
 def init_db():
-    """Bazani ishga tushirish — faqat 1 ta qator (id=1) saqlanadi"""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -62,7 +60,6 @@ def init_db():
 
 
 def get_memory() -> str:
-    """Zichlangan xotirani o'qish"""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT compressed_text FROM memory WHERE id = 1")
@@ -72,7 +69,6 @@ def get_memory() -> str:
 
 
 def update_memory(text: str):
-    """Zichlangan xotirani yangilash (eskinining o'rniga)"""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("UPDATE memory SET compressed_text = ? WHERE id = 1", (text,))
@@ -82,7 +78,6 @@ def update_memory(text: str):
 
 # ============== AI CLIENT ==============
 async def ai_chat(messages: list, temperature: float = 0.7) -> str:
-    """OpenAI-compatible API ga so'rov"""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {AI_API_KEY}",
@@ -106,10 +101,6 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
 
 
 async def compress_memory(old_memory: str, user_msg: str, assistant_msg: str) -> str:
-    """
-    Eski xotira + yangi suhbatni AI ga yuborib,
-    bitta zichlangan matn (summary/facts) qilib qaytarish
-    """
     prompt = f"""Siz xotira zichlashtirish tizimisiz. Eski xotira va yangi suhbatni EXTREMELY concise, qisqa fakt va xulosa shaklida birlashtiring. Faqat muhim ma'lumotlar, user preferences, va kontekstni saqlang. Ortiqcha so'zlarsiz, to'g'ridan-to'g'ri matn chiqaring.
 
 Eski xotira:
@@ -158,11 +149,8 @@ dp = Dispatcher()
 
 
 def is_admin(event: Message | CallbackQuery) -> bool:
-    """Faqat ADMIN_ID ga tegishli foydalanuvchiga ruxsat"""
     return event.from_user.id == ADMIN_ID
 
-
-# --- Handlerlar ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -195,7 +183,6 @@ async def download_memory(callback: CallbackQuery):
 
     await callback.answer()
 
-    # Xotira matnini .txt fayl sifatida yuborish
     memory_text = get_memory()
     if not memory_text.strip():
         memory_text = "[Xotira hali bo'sh]"
@@ -219,11 +206,15 @@ async def handle_message(message: Message):
     user_text = message.text
     old_memory = get_memory()
 
-    # 1) AI ga system prompt + user xabari yuborish
+    if old_memory:
+        mem_block = old_memory
+    else:
+        mem_block = "[Hali xotira yo'q]"
+
     system_prompt = (
-        f"Siz foydalanuvchining shaxsiy yordamchisisiz. "
-        f"Quyidagi matn sizning doimiy xotirangizdir. Unga asoslanib javob bering.\n\n"
-        f"XOTIRA:\n{old_memory if old_memory else '[Hali xotira yo\\'q]'}"
+        "Siz foydalanuvchining shaxsiy yordamchisisiz. "
+        "Quyidagi matn sizning doimiy xotirangizdir. Unga asoslanib javob bering.\n\n"
+        f"XOTIRA:\n{mem_block}"
     )
 
     try:
@@ -237,10 +228,8 @@ async def handle_message(message: Message):
         await message.answer(f"❌ AI xatolik: {e}")
         return
 
-    # 2) Javobni foydalanuvchiga yuborish
     await message.answer(assistant_text)
 
-    # 3) Suhbatdan so'ng xotirani fonda zichlashtirish va yangilash
     asyncio.create_task(
         _background_compress_and_save(old_memory, user_text, assistant_text)
     )
@@ -249,7 +238,6 @@ async def handle_message(message: Message):
 async def _background_compress_and_save(
     old_memory: str, user_msg: str, assistant_msg: str
 ):
-    """Har bir suhbatdan so'ng eski xotira + yangi dialogni zichlashtirish"""
     try:
         new_memory = await compress_memory(old_memory, user_msg, assistant_msg)
         loop = asyncio.get_running_loop()
