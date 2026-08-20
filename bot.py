@@ -9,7 +9,6 @@ import os
 import asyncio
 import sqlite3
 from datetime import datetime
-from typing import Optional
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
@@ -101,21 +100,25 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
 
 
 async def compress_memory(old_memory: str, user_msg: str, assistant_msg: str) -> str:
-    prompt = f"""Siz xotira zichlashtirish tizimisiz. Eski xotira va yangi suhbatni EXTREMELY concise, qisqa fakt va xulosa shaklida birlashtiring. Faqat muhim ma'lumotlar, user preferences, va kontekstni saqlang. Ortiqcha so'zlarsiz, to'g'ridan-to'g'ri matn chiqaring.
-
-Eski xotira:
-{old_memory if old_memory else "[Bo'sh]"}
-
-Yangi suhbat:
-User: {user_msg}
-Assistant: {assistant_msg}
-
-ZICHLANGAN XOTIRA (faqat matn):"""
+    old_mem_text = old_memory if old_memory else "[Bo'sh]"
+    prompt = (
+        "Siz xotira zichlashtirish tizimisiz. Eski xotira va yangi suhbatni "
+        "EXTREMELY concise, qisqa fakt va xulosa shaklida birlashtiring. "
+        "Faqat muhim ma'lumotlar, user preferences, va kontekstni saqlang. "
+        "Ortiqcha so'zlarsiz, to'g'ridan-to'g'ri matn chiqaring.\n\n"
+        f"Eski xotira:\n{old_mem_text}\n\n"
+        f"Yangi suhbat:\nUser: {user_msg}\n"
+        f"Assistant: {assistant_msg}\n\n"
+        "ZICHLANGAN XOTIRA (faqat matn):"
+    )
 
     messages = [
         {
             "role": "system",
-            "content": "Siz xotira zichlashtiruvchisiz. Javobingiz faqatgina zichlangan xotira matnidan iborat bo'lsin, hech qanday izohsiz.",
+            "content": (
+                "Siz xotira zichlashtiruvchisiz. Javobingiz faqatgina "
+                "zichlangan xotira matnidan iborat bo'lsin, hech qanday izohsiz."
+            ),
         },
         {"role": "user", "content": prompt},
     ]
@@ -148,7 +151,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
-def is_admin(event: Message | CallbackQuery) -> bool:
+def is_admin(event) -> bool:
     return event.from_user.id == ADMIN_ID
 
 
