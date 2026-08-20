@@ -28,10 +28,7 @@ class AntigravityAI:
 
     def _init_history(self):
         with open(self.history_file, "a", encoding="utf-8") as f:
-            f.write("
---- New Session: %s ---
-
-" % datetime.datetime.now())
+            f.write("\n--- New Session: %s ---\n\n" % datetime.datetime.now())
 
     def ask(self, prompt):
         try:
@@ -71,37 +68,19 @@ class AntigravityAI:
 
     def _save_to_history(self, prompt, reply):
         with open(self.history_file, "a", encoding="utf-8") as f:
-            f.write("**User:** %s
-
-" % prompt)
-            f.write("**AI:** %s
-
----
-
-" % reply)
+            f.write("**User:** %s\n\n" % prompt)
+            f.write("**AI:** %s\n\n---\n\n" % reply)
 
     def _export_chat(self):
         filename = "export_%s.md" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         with open(filename, "w", encoding="utf-8") as f:
-            f.write("# Chat Export --- %s
-
-" % datetime.datetime.now())
-            f.write("**Model:** %s
-
-" % self.model)
+            f.write("# Chat Export --- %s\n\n" % datetime.datetime.now())
+            f.write("**Model:** %s\n\n" % self.model)
             for msg in self.messages:
                 if msg["role"] == "user":
-                    f.write("## User
-%s
-
-" % msg["content"])
+                    f.write("## User\n%s\n\n" % msg["content"])
                 elif msg["role"] == "assistant":
-                    f.write("## AI
-%s
-
----
-
-" % msg["content"])
+                    f.write("## AI\n%s\n\n---\n\n" % msg["content"])
         return "[system] Chat exported to: %s" % filename
 
     def clear_history(self):
@@ -138,3 +117,4 @@ if __name__ == "__main__":
             print(ai.show_help())
             continue
         print(ai.ask(q))
+
