@@ -60,6 +60,9 @@ if not BOT_TOKEN:
 # ============== AUTH ==============
 authenticated_chats = set()
 
+# ============== PENDING COMMANDS ==============
+pending_shell_commands = {}
+
 
 def is_authenticated(chat_id: int) -> bool:
     return chat_id in authenticated_chats
@@ -122,8 +125,7 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
 
                     if resp.status == 429:
                         last_error = text[:500]
-                        logger.warning(f"429 Rate Limit (attempt {attempt+1}): {last_error}")
-                        # Kutish va retry
+                        logger.warning(f"429 Rate Limit (attempt {attempt+1})")
                         wait = 5 * (attempt + 1)
                         logger.info(f"{wait}s kutib retry...")
                         await asyncio.sleep(wait)
@@ -132,14 +134,12 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
                     if resp.status != 200:
                         raise RuntimeError(f"AI API xato {resp.status}: {text[:500]}")
 
-                    # Try regular JSON first
                     try:
                         data = json_mod.loads(text)
                         return data["choices"][0]["message"]["content"].strip()
                     except json_mod.JSONDecodeError:
                         pass
 
-                    # Parse SSE format
                     full_content = ""
                     for line in text.split("\n"):
                         line = line.strip()
@@ -270,33 +270,45 @@ async def tool_search_code(path: str, pattern: str) -> str:
         return f"❌ Xato: {e}"
 
 
-# ============== AGENT SYSTEM ==============
-AGENT_SYSTEM_PROMPT = """Siz "OmniAgent" avtonom VPS yordamchisisiz. Foydalanuvchi topshirig'ini VPS ichida bajarish uchun tool'lardan foydalanasiz.
+# ============== AGENT SYSTEM (MUKAMMAL PROMPT) ==============
+AGENT_SYSTEM_PROMPT = """Siz "OmniAgent" avtonom VPS yordamchisisiz. Sizning vazifangiz - foydalanuvchi topshirig'ini VPS ichida aniq va mukammal bajarish.
 
-SIZNING TOOL'LARINGIZ (har bir javobda FAQAT BITTA tool ishlating):
+=== SIZNING TOOL'LARINGIZ ===
+Har bir javobda FAQAT BITTA JSON obyekt bo'lishi kerak. Boshqa matn, izoh, yoki markdown code block bo'lmasin.
 
-1. read_file - Faylni o'qish
-   FORMAT: {"tool": "read_file", "path": "/root/speedpro/bot.py"}
+1. read_file - Mavjud faylni o'qish
+   {"tool": "read_file", "path": "/root/speedpro/bot.py"}
 
-2. write_file - Faylga yozish
-   FORMAT: {"tool": "write_file", "path": "/root/speedpro/bot.py", "content": "import os\n..."}
+2. write_file - Yangi fayl yaratish yoki mavjudini yangilash
+   {"tool": "write_file", "path": "/root/speedpro/bot.py", "content": "import os\n..."}
 
-3. execute_shell - Shell buyruqni bajarish
-   FORMAT: {"tool": "execute_shell", "command": "ls -la /root/speedpro"}
+3. execute_shell - Shell buyruqni bajarish (FAQAT TASDIQLANGANDAN KEYIN)
+   {"tool": "execute_shell", "command": "ls -la /root/speedpro"}
 
-4. list_files - Fayllar ro'yxatini ko'rish
-   FORMAT: {"tool": "list_files", "path": "/root/speedpro"}
+4. list_files - Papka tarkibini ko'rish
+   {"tool": "list_files", "path": "/root/speedpro"}
 
 5. search_code - Kod ichidan qidirish
-   FORMAT: {"tool": "search_code", "path": "/root/speedpro", "pattern": "def main"}
+   {"tool": "search_code", "path": "/root/speedpro", "pattern": "def main"}
 
-QOIDALAR:
-- Har bir javobda FAQAT BITTA JSON obyekt bo'lishi kerak
-- Agar vazifa tugagan bo'lsa, {"done": true, "answer": "yakuniy xabar"} formatida javob bering
-- write_file da content ichida \\n yangi qatorni anglatadi
-- Xavfsizlik: rm -rf / kabi buyruqlarni BAJARMAGAN BO'LING
-- Avval faylni o'qing, keyin tahlil qiling, keyin tuzating
-- Har bir qadamda nima qilayotganingizni tushuntiring (THOUGHT: ... bilan boshlang)
+=== MUHIM QOIDALAR ===
+1. Har bir javobda FAQAT Bitta JSON obyekt. Hech qanday izoh, markdown, yoki THOUGHT JSON dan tashqarida bo'lmasin.
+2. execute_shell faqat quyidagi holatlarda ishlatiladi:
+   - pip install
+   - python3 bot.py
+   - git pull
+   - systemctl restart
+   - test/qayta ishga tushirish
+   BOSHQA HOLATLARDA execute_shell ISHLATMAGAN BO'LING.
+3. Fayllarni o'zgartirishdan oldin AVVAL o'qing, keyin to'liq yangi versiyani write_file bilan yozing.
+4. write_file da content ichida \\n yangi qatorni anglatadi.
+5. Agar vazifa tugagan bo'lsa:
+   {"done": true, "answer": "Bajarildi: ..."}
+6. Xavfsizlik: rm -rf / kabi buyruqlarni BAJARMAGAN BO'LING.
+7. Har bir qadamda oldingi natijalarni tahlil qiling va keyingi qadamni rejalashtiring.
+8. Agar xato topilsa, avval xato sababini tahlil qiling, keyin to'g'ri versiyani yozing.
+9. Python kod yozayotganda, sintaksis xatolarini oldini olish uchun ehtiyotkor bo'ling.
+10. Fayl yo'lini to'g'ri ko'rsating: /root/speedpro/bot.py (faqat bot.py emas)
 
 SIZNING XOTIRANGIZ:
 """
@@ -306,7 +318,7 @@ async def agent_execute(chat_id: int, user_request: str, memory: str) -> str:
     system_msg = AGENT_SYSTEM_PROMPT + (memory if memory else "[Bo'sh]")
     messages = [
         {"role": "system", "content": system_msg},
-        {"role": "user", "content": f"TOPSHIRIQ: {user_request}\n\nIltimos, THOUGHT bilan boshlang va keyin JSON formatida action bajaring."}
+        {"role": "user", "content": f"TOPSHIRIQ: {user_request}\n\nIltimos, faqat JSON formatida javob bering. Izohsiz."}
     ]
 
     max_steps = 15
@@ -316,24 +328,44 @@ async def agent_execute(chat_id: int, user_request: str, memory: str) -> str:
     while step < max_steps:
         step += 1
         try:
-            response = await ai_chat(messages, temperature=0.2)
+            response = await ai_chat(messages, temperature=0.1)
         except Exception as e:
             return f"❌ AI bilan bog'lanishda xato: {e}\n\nBajarilgan qadamlar:\n" + "\n".join(logs)
 
         logs.append(f"\n--- Qadam {step} ---")
         logs.append(response[:500])
 
-        # Extract JSON from response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if not json_match:
+        # Extract JSON from response - try to find the first valid JSON object
+        data = None
+        # Try to find JSON in code blocks first
+        code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+        if code_block_match:
+            try:
+                data = json_mod.loads(code_block_match.group(1))
+            except:
+                pass
+
+        if not data:
+            # Try to find raw JSON object
+            # Find the outermost braces
+            start = response.find('{')
+            if start != -1:
+                depth = 0
+                for i in range(start, len(response)):
+                    if response[i] == '{':
+                        depth += 1
+                    elif response[i] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                data = json_mod.loads(response[start:i+1])
+                                break
+                            except:
+                                continue
+
+        if not data:
             logs.append("(JSON topilmadi, yakuniy javob sifatida qabul qilindi)")
             return f"✅ Agent javobi ({step} qadam):\n\n{response}\n\n---\nBajarilgan qadamlar:\n" + "\n".join(logs)
-
-        try:
-            data = json_mod.loads(json_match.group())
-        except:
-            logs.append("(JSON parse xatosi)")
-            return f"⚠️ Agent to'xtadi ({step} qadam)\n\n{response[:1000]}\n\n---\nBajarilgan qadamlar:\n" + "\n".join(logs)
 
         # Check if done
         if data.get("done"):
@@ -349,7 +381,10 @@ async def agent_execute(chat_id: int, user_request: str, memory: str) -> str:
         elif tool_name == "write_file":
             result = await tool_write_file(params.get("path", ""), params.get("content", ""))
         elif tool_name == "execute_shell":
-            result = await tool_execute_shell(params.get("command", ""))
+            # Store pending command and ask for confirmation
+            cmd = params.get("command", "")
+            pending_shell_commands[chat_id] = cmd
+            return f"⏳ SHELL BUYRUQ TASDIQLASH KUTILMOQDA:\n\n`{cmd}`\n\nTasdiqlash uchun /tasdiq deb yozing.\n\nBajarilgan qadamlar ({step} ta):\n" + "\n".join(logs)
         elif tool_name == "list_files":
             result = await tool_list_files(params.get("path", "."))
         elif tool_name == "search_code":
@@ -437,7 +472,6 @@ async def cmd_status(message: Message):
             await message.answer("🔐 Avval parolni kiriting:")
             return
 
-        # AI health check
         ai_status = "✅ AI ulanish OK"
         try:
             await ai_chat([
@@ -532,11 +566,82 @@ async def cmd_shell(message: Message):
         if len(args) < 2:
             await message.answer("💻 Foydalanish: /buyruq <command>\nMasalan: /buyruq ls -la")
             return
-        await message.answer("⏳ Buyruq bajarilmoqda...")
-        result = await tool_execute_shell(args[1])
-        await send_long_message(message, result)
+
+        cmd = args[1]
+        chat_id = message.chat.id
+        pending_shell_commands[chat_id] = cmd
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"confirm_shell:{chat_id}"),
+                    InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"cancel_shell:{chat_id}")
+                ]
+            ]
+        )
+        await message.answer(
+            f"⚠️ Quyidagi buyruqni bajarishni tasdiqlaysizmi?\n\n"
+            f"```\n{cmd}\n```",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
     except Exception as e:
         logger.error(f"/buyruq xato: {e}")
+        await message.answer(f"❌ Xatolik: {e}")
+
+
+@dp.callback_query(F.data.startswith("confirm_shell:"))
+async def confirm_shell(callback: CallbackQuery):
+    try:
+        chat_id = int(callback.data.split(":")[1])
+        if not is_authenticated(callback.message.chat.id):
+            await callback.answer("🔐 Avval parolni kiriting!", show_alert=True)
+            return
+
+        cmd = pending_shell_commands.pop(chat_id, None)
+        if not cmd:
+            await callback.answer("❌ Buyruq topilmadi", show_alert=True)
+            return
+
+        await callback.answer("⏳ Bajarilmoqda...")
+        await callback.message.edit_text(f"⏳ Bajarilmoqda...\n```\n{cmd}\n```", parse_mode="Markdown")
+
+        result = await tool_execute_shell(cmd)
+        await send_long_message(callback.message, result)
+    except Exception as e:
+        logger.error(f"confirm_shell xato: {e}")
+        await callback.message.answer(f"❌ Xatolik: {e}")
+
+
+@dp.callback_query(F.data.startswith("cancel_shell:"))
+async def cancel_shell(callback: CallbackQuery):
+    try:
+        chat_id = int(callback.data.split(":")[1])
+        pending_shell_commands.pop(chat_id, None)
+        await callback.answer("❌ Bekor qilindi")
+        await callback.message.edit_text("❌ Buyruq bekor qilindi.")
+    except Exception as e:
+        logger.error(f"cancel_shell xato: {e}")
+
+
+@dp.message(Command("tasdiq"))
+async def cmd_confirm(message: Message):
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Avval parolni kiriting:")
+            return
+
+        chat_id = message.chat.id
+        cmd = pending_shell_commands.pop(chat_id, None)
+        if not cmd:
+            await message.answer("❌ Tasdiqlash uchun buyruq yo'q. Agent topshirig'idan keyin /tasdiq yozing.")
+            return
+
+        await message.answer(f"⏳ Bajarilmoqda...\n```\n{cmd}\n```", parse_mode="Markdown")
+        result = await tool_execute_shell(cmd)
+        await send_long_message(message, result)
+    except Exception as e:
+        logger.error(f"/tasdiq xato: {e}")
         await message.answer(f"❌ Xatolik: {e}")
 
 
