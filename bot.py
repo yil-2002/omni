@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Shaxsiy AI Yordamchi v3.1 — Lazy Import Edition
-Barcha qo'shimcha kutubxonalar kerak bo'lganda yuklanadi.
-Bot har qanday holatda ishga tushadi.
+Shaxsiy AI Yordamchi v3.2 — Robust Edition
+- Eski xotirani avtomatik import qiladi
+- AI sekin bo'lsa, foydalanuvchini xabardor qiladi
+- Mood analysis bloklamaydi (background'da)
+- Qisqa timeout (30s), kam retry (2 ta)
 
-Minimal requirements:
+Requirements:
     pip install aiogram aiohttp python-dotenv
-
-Qo'shimcha (ixtiyoriy):
-    pip install gtts matplotlib cryptography
 """
 
 import os
@@ -20,9 +19,6 @@ import json
 import re
 import traceback
 import logging
-import io
-import subprocess
-import textwrap
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -129,11 +125,12 @@ def _get_cipher():
                 f.write(_ENCRYPTION_KEY)
     return Fernet(_ENCRYPTION_KEY)
 
-# ============== SQLITE BAZA ==============
+# ============== SQLITE BAZA + ESKI XOTIRA MIGRATSIYA ==============
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
+    # Yangi jadvallar
     cur.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,11 +191,28 @@ def init_db():
         )
     """)
 
+    # ESKI XOTIRANI IMPORT QILISH (faqat bir marta)
+    try:
+        cur.execute("SELECT compressed_text FROM memory WHERE id = 1")
+        old_row = cur.fetchone()
+        if old_row and old_row[0] and old_row[0].strip():
+            old_text = old_row[0].strip()
+            # Tekshirish: allaqachon import qilinganmi?
+            cur.execute("SELECT COUNT(*) FROM messages WHERE role = 'system' AND content LIKE ?", ("%[ESKI XOTIRA]%",))
+            if cur.fetchone()[0] == 0:
+                cur.execute(
+                    "INSERT INTO messages (chat_id, role, content, topic) VALUES (?, ?, ?, ?)",
+                    (0, "system", f"[ESKI XOTIRA — AVVALGI BOTDAN]:\\n{old_text}", "general")
+                )
+                logger.info(f"✅ Eski xotira import qilindi ({len(old_text)} belgi)")
+    except Exception as e:
+        logger.info(f"Eski xotira import (memory jadvali yo'q yoki bo'sh): {e}")
+
     cur.execute("INSERT OR IGNORE INTO daily_profile (id, profile_text) VALUES (1, '')")
     cur.execute("INSERT OR IGNORE INTO topics (name, description) VALUES ('general', 'Umumiy suhbatlar')")
     conn.commit()
     conn.close()
-    logger.info("✅ Baza v3.1 initializatsiya qilindi")
+    logger.info("✅ Baza v3.2 initializatsiya qilindi")
 
 
 def save_message(chat_id: int, role: str, content: str, topic: str = "general", mood: float = None):
@@ -339,10 +353,10 @@ def save_weekly_summary(week_start: str, summary: str):
     conn.close()
 
 
-# ============== AI CLIENT (MULTI-MODEL FALLBACK) ==============
+# ============== AI CLIENT (TEZKOR + KAM RETRY) ==============
 async def ai_chat(messages: list, temperature: float = 0.7, max_tokens: int = 4000, model_idx: int = 0) -> str:
     if model_idx >= len(MODELS):
-        raise RuntimeError("Barcha modellar ishlamadi.")
+        raise RuntimeError("Barcha modellar ishlamadi. Keyinroq urinib ko'ring.")
 
     model = MODELS[model_idx]
     headers = {
@@ -357,25 +371,26 @@ async def ai_chat(messages: list, temperature: float = 0.7, max_tokens: int = 40
         "stream": False,
     }
 
-    for attempt in range(5):
+    # FAQAT 2 ta urinish (tezroq fail qilsin)
+    for attempt in range(2):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{AI_BASE_URL}/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120)
+                    timeout=aiohttp.ClientTimeout(total=30)  # 30 soniya (avval 120 edi)
                 ) as resp:
                     text = await resp.text()
 
                     if resp.status == 429:
-                        wait = min(2 ** attempt * 3, 60)
-                        logger.warning(f"[{model}] 429 (attempt {attempt+1}), {wait}s kutish...")
+                        wait = min(2 ** attempt * 2, 10)  # Maks 10 soniya
+                        logger.warning(f"[{model}] 429, {wait}s kutish...")
                         await asyncio.sleep(wait)
                         continue
 
                     if resp.status != 200:
-                        raise RuntimeError(f"AI API xato {resp.status}: {text[:500]}")
+                        raise RuntimeError(f"AI API xato {resp.status}: {text[:300]}")
 
                     data = json.loads(text)
                     content = data["choices"][0]["message"]["content"].strip()
@@ -383,32 +398,35 @@ async def ai_chat(messages: list, temperature: float = 0.7, max_tokens: int = 40
                         return content
                     raise RuntimeError("Bo'sh javob")
 
+        except asyncio.TimeoutError:
+            logger.warning(f"[{model}] Timeout (30s)")
+            break  # Keyingi modelga o'tish
         except Exception as e:
-            if attempt < 4:
-                await asyncio.sleep(3)
-                continue
-            logger.warning(f"[{model}] ishlamadi: {e}. Fallback...")
-            return await ai_chat(messages, temperature, max_tokens, model_idx + 1)
+            logger.warning(f"[{model}] xato: {e}")
+            break  # Keyingi modelga o'tish
 
+    # Keyingi modelga o'tish
     return await ai_chat(messages, temperature, max_tokens, model_idx + 1)
 
 
-# ============== MOOD ANALYSIS ==============
-async def analyze_mood(text: str) -> float:
-    prompt = f"""Quyidagi matnning kayfiyatini -1 (juda yomon) dan 1 (juda yaxshi) gacha ball bilan baholang. FAQAT raqam chiqaring, izohsiz.
+# ============== MOOD ANALYSIS (BACKGROUND, BLOKLAMAYDI) ==============
+async def analyze_mood_bg(chat_id: int, text: str):
+    """Background'da kayfiyatni tahlil qiladi, javobni kutmaydi"""
+    prompt = f"""Quyidagi matnning kayfiyatini -1 dan 1 gacha ball bilan baholang. FAQAT raqam.
 
 Matn: {text[:500]}
 
 Ball:"""
     try:
         result = await ai_chat([
-            {"role": "system", "content": "Siz sentiment analizchisisiz. Faqat raqam chiqaring."},
+            {"role": "system", "content": "Sentiment analiz. Faqat raqam."},
             {"role": "user", "content": prompt}
         ], temperature=0.0, max_tokens=10)
         score = float(re.findall(r"[-+]?[0-9]*\.?[0-9]+", result)[0])
-        return max(-1.0, min(1.0, score))
-    except:
-        return 0.0
+        score = max(-1.0, min(1.0, score))
+        save_mood(chat_id, score, text[:50])
+    except Exception as e:
+        logger.debug(f"Mood tahlil xatosi: {e}")
 
 
 # ============== VOICE GENERATION ==============
@@ -431,7 +449,7 @@ async def run_code_sandbox(code: str) -> str:
     blocked = ["import os", "import sys", "open(", "__import__", "subprocess", "eval(", "exec(", "compile(", "input(", "raw_input"]
     for b in blocked:
         if b in code.lower():
-            return f"🚫 Bloklangan: '{b}' xavfli operatsiya"
+            return f"🚫 Bloklangan: '{b}'"
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -447,10 +465,10 @@ async def run_code_sandbox(code: str) -> str:
             result = f"📤 STDOUT:\n{out}" if out else ""
             if err:
                 result += f"\n\n⚠️ STDERR:\n{err}"
-            return result or "✅ Kod muvaffaqiyatli bajarildi (natija yo'q)"
+            return result or "✅ Kod bajarildi (bo'sh natija)"
         except asyncio.TimeoutError:
             proc.kill()
-            return "⏰ Kod 10 soniyada bajarilmadi (timeout)"
+            return "⏰ Kod 10 soniyada bajarilmadi"
     except Exception as e:
         return f"❌ Xato: {e}"
 
@@ -469,7 +487,12 @@ async def send_daily_backup(chat_id: int):
     conn.close()
 
     if not rows:
-        await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.")
+        # Eski xotirani tekshirish
+        old_msgs = get_recent_messages(chat_id, limit=1)
+        if not old_msgs:
+            await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.\\nAfsuski, avvalgi suhbat ma'lumotlari mavjud emas.")
+            return
+        await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.\\nLekin avvalgi suhbatlar saqlangan. /tariz bilan ko'rishingiz mumkin.")
         return
 
     history = "\n".join([f"{'👤' if r[0]=='user' else '🤖'} {r[1][:120]}" for r in rows])
@@ -480,7 +503,7 @@ async def send_daily_backup(chat_id: int):
             {"role": "user", "content": prompt}
         ], temperature=0.4, max_tokens=1500)
     except:
-        summary = "[Xulosa yaratilmadi]"
+        summary = "[Xulosa yaratilmadi — AI band]"
 
     profile = get_daily_profile()
 
@@ -732,12 +755,11 @@ voice_mode = set()
 
 
 def _feature_status() -> str:
-    """Qaysi funksiyalar ishlayotganini ko'rsatadi"""
     features = []
     features.append(f"🧠 AI: {'✅' if MODELS[0] else '❌'}")
-    features.append(f"🔊 Voice (gTTS): {'✅' if _get_gtts() else '❌ pip install gtts'}")
-    features.append(f"📊 Charts (matplotlib): {'✅' if _get_matplotlib() else '❌ pip install matplotlib'}")
-    features.append(f"🔐 Encrypt (cryptography): {'✅' if _get_fernet() else '❌ pip install cryptography'}")
+    features.append(f"🔊 Voice: {'✅' if _get_gtts() else '❌ pip install gtts'}")
+    features.append(f"📊 Charts: {'✅' if _get_matplotlib() else '❌ pip install matplotlib'}")
+    features.append(f"🔐 Encrypt: {'✅' if _get_fernet() else '❌ pip install cryptography'}")
     features.append(f"📡 Mirror: {'✅' if CHANNEL_ID else '❌ CHANNEL_ID yoq'}")
     return "\n".join(features)
 
@@ -770,7 +792,7 @@ async def cmd_start(message: Message):
         f"/voice — Ovozli rejim ON/OFF\n"
         f"/run <kod> — Python kod bajarish\n"
         f"/kayfiyat — 14 kunlik kayfiyat grafigi\n"
-        f"/eslatma <vaqt> <xabar> — Eslatma qo'shish\n"
+        f"/eslatma <vaqt> <xabar> — Eslatma\n"
         f"/haftalik — Haftalik chuqur tahlil\n"
         f"/xotira — Kunlik xotira (qo'lda)\n"
         f"/export — Shifrlangan eksport\n"
@@ -812,7 +834,7 @@ async def cmd_voice(message: Message):
     if not is_authenticated(chat_id):
         return
     if _get_gtts() is None:
-        await message.answer("❌ gTTS o'rnatilmagan.\n`pip install gtts` deb o'rnating.")
+        await message.answer("❌ gTTS o'rnatilmagan.\n`pip install gtts`")
         return
     if chat_id in voice_mode:
         voice_mode.discard(chat_id)
@@ -854,7 +876,7 @@ async def cmd_mood(message: Message):
         return
 
     if _get_matplotlib() is None:
-        await message.answer("❌ Matplotlib o'rnatilmagan.\n`pip install matplotlib` deb o'rnating.")
+        await message.answer("❌ Matplotlib o'rnatilmagan.\n`pip install matplotlib`")
         return
 
     chart_path = await generate_mood_chart(chat_id)
@@ -1067,7 +1089,7 @@ async def cmd_export(message: Message):
         return
 
     if _get_fernet() is None:
-        await message.answer("❌ Cryptography o'rnatilmagan.\n`pip install cryptography` deb o'rnating.")
+        await message.answer("❌ Cryptography o'rnatilmagan.\n`pip install cryptography`")
         return
 
     await message.answer("🔐 Ma'lumotlar shifrlanmoqda...")
@@ -1076,7 +1098,7 @@ async def cmd_export(message: Message):
         if filename:
             await message.answer_document(
                 FSInputFile(filename),
-                caption="🔐 Shifrlangan eksport. Kalit .secret_key faylida saqlanadi."
+                caption="🔐 Shifrlangan eksport. Kalit .secret_key faylida."
             )
             os.remove(filename)
         else:
@@ -1138,7 +1160,7 @@ async def handle_photo(message: Message):
 
     except Exception as e:
         logger.error(f"Rasm tahlil xatosi: {e}")
-        await message.answer(f"❌ Rasmni tushunishda xato. Model vision qo'llamasligi mumkin: {e}")
+        await message.answer(f"❌ Rasmni tushunishda xato: {e}")
     finally:
         typing_task.cancel()
 
@@ -1150,6 +1172,7 @@ async def handle_message(message: Message):
     chat_id = message.chat.id
     user_text = message.text
 
+    # Parol tekshiruvi
     if not is_authenticated(chat_id):
         if user_text == ADMIN_PASSWORD:
             authenticated_chats.add(chat_id)
@@ -1163,15 +1186,26 @@ async def handle_message(message: Message):
             await message.answer("❌ Noto'g'ri parol.")
         return
 
+    # Komandalarni skip qilish
     if user_text.startswith("/"):
         return
 
-    mood = await analyze_mood(user_text)
-    topic = current_topics.get(chat_id, "general")
-    save_message(chat_id, "user", user_text, topic, mood)
+    # MOOD ANALYSIS — BACKGROUND'DA, BLOKLAMAYDI
+    asyncio.create_task(analyze_mood_bg(chat_id, user_text))
 
+    # Xabarni saqlash
+    topic = current_topics.get(chat_id, "general")
+    save_message(chat_id, "user", user_text, topic)
+
+    # Kontekstni yig'ish
     profile = get_daily_profile()
     recent_msgs = get_recent_messages(chat_id, limit=30, topic=topic)
+
+    # Eski xotirani ham qo'shish (agar bor bo'lsa)
+    old_memory_msgs = []
+    for m in recent_msgs:
+        if m['role'] == 'system' and '[ESKI XOTIRA' in m['content']:
+            old_memory_msgs.append(m)
 
     system_prompt = f"""Siz foydalanuvchining SHAXSIY va YAQIN AI yordamchisisiz.
 
@@ -1180,7 +1214,6 @@ SIZNING VAZIFALARINGIZ:
 2. Uning so'rovlari ustida FOCUS qiling, boshqa narsalarga chalg'imang
 3. O'zbek tilida javob bering (agar boshqa til talab qilinmasa)
 4. Qisqa va aniq bo'ling, lekin kerakli ma'lumotni to'liq bering
-5. Foydalanuvchining kayfiyatini hisobga oling: hozirgi xabar kayfiyati {mood:.2f} (-1 yomon, 1 yaxshi)
 
 SIZNING PROFILINGIZ:
 {profile if profile else '[Hali profil shakllanmagan]'}
@@ -1189,19 +1222,28 @@ Joriy mavzu: {topic}
 """
 
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(recent_msgs)
+    # Eski xotirani birinchi qo'shish
+    if old_memory_msgs:
+        messages.extend(old_memory_msgs)
+    messages.extend([m for m in recent_msgs if m['role'] != 'system'])
     messages.append({"role": "user", "content": user_text})
 
     typing_task = asyncio.create_task(typing_indicator(chat_id))
 
+    # AGAR 10 SONIYADAN KO'P KETSA, FOYDALANUVCHINI XABARDOR QILISH
+    notify_task = asyncio.create_task(_notify_if_slow(chat_id))
+
     try:
         assistant_text = await ai_chat(messages, temperature=0.7)
+        notify_task.cancel()
         save_message(chat_id, "assistant", assistant_text, topic)
 
+        # Profilni yangilash (har 20 xabardan keyin)
         stats = get_stats(chat_id)
         if (stats['user_msgs'] + stats['ai_msgs']) % 20 == 0:
             asyncio.create_task(update_learning_profile(chat_id))
 
+        # Ovozli rejim
         if chat_id in voice_mode:
             voice_path = await generate_voice(assistant_text)
             if voice_path:
@@ -1214,34 +1256,45 @@ Joriy mavzu: {topic}
         else:
             await send_long_message(chat_id, assistant_text)
 
+        # Mirror
         if len(assistant_text) > 100:
             await mirror_to_channel(f"💬 Suhbat:\n👤: {user_text[:100]}\n🤖: {assistant_text[:200]}")
 
     except RuntimeError as e:
-        typing_task.cancel()
-        if "429" in str(e) or "band" in str(e).lower():
-            await message.answer("⏳ AI hozircha band. 30 soniyadan keyin avtomatik qayta urinib ko'raman...")
-            await asyncio.sleep(30)
-            try:
-                assistant_text = await ai_chat(messages, temperature=0.7)
-                save_message(chat_id, "assistant", assistant_text, topic)
-                await send_long_message(chat_id, assistant_text)
-            except Exception as e2:
-                await message.answer(f"❌ AI hali ham band: {e2}")
+        notify_task.cancel()
+        if "429" in str(e) or "band" in str(e).lower() or "Rate" in str(e):
+            await message.answer(
+                "⏳ AI hozircha band (Rate Limit).\n"
+                "Iltimos, 1-2 daqiqa kutib qayta urinib ko'ring.\n\n"
+                "📊 /status — bot holatini ko'rish"
+            )
         else:
-            await message.answer(f"❌ AI xatolik: {e}")
+            await message.answer(f"❌ AI xatolik: {e}\n\nQayta urinib ko'ring yoki /status ni tekshiring.")
     except Exception as e:
-        typing_task.cancel()
+        notify_task.cancel()
         logger.error(f"AI suhbat xato: {e}")
         await message.answer(f"❌ Xatolik: {e}")
     finally:
         typing_task.cancel()
 
 
+async def _notify_if_slow(chat_id: int):
+    """Agar javob 8 soniyadan ko'p ketsa, foydalanuvchini xabardor qiladi"""
+    await asyncio.sleep(8)
+    try:
+        await bot.send_message(
+            chat_id,
+            "⏳ AI javob tayyorlanmoqda...\n"
+            "Bu 10-30 soniya olishi mumkin (model band bo'lsa)."
+        )
+    except:
+        pass
+
+
 # ============== MAIN ==============
 async def main():
     init_db()
-    logger.info("✅ Bot ishga tushdi (v3.1 — Lazy Import Edition)")
+    logger.info("✅ Bot ishga tushdi (v3.2 — Robust Edition)")
 
     asyncio.create_task(cron_scheduler())
 
