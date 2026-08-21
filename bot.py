@@ -6,12 +6,15 @@ Requirements:
 """
 
 import os
+import sys
 import asyncio
 import sqlite3
 import json as json_mod
 import subprocess
 import shlex
 import re
+import traceback
+import logging
 from datetime import datetime
 
 import aiohttp
@@ -25,6 +28,17 @@ from aiogram.types import (
     FSInputFile,
 )
 from dotenv import load_dotenv
+
+# ============== LOGGING ==============
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger(__name__)
 
 # ============== KONFIGURATSIYA ==============
 load_dotenv()
@@ -83,7 +97,7 @@ def update_memory(text: str):
     conn.close()
 
 
-# ============== AI CLIENT ==============
+# ============== AI CLIENT (MUSTAHKAM) ==============
 async def ai_chat(messages: list, temperature: float = 0.7) -> str:
     headers = {
         "Content-Type": "application/json",
@@ -97,44 +111,66 @@ async def ai_chat(messages: list, temperature: float = 0.7) -> str:
         "stream": False,
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{AI_BASE_URL}/chat/completions", headers=headers, json=payload
-        ) as resp:
-            text = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(f"AI API xato {resp.status}: {text[:500]}")
+    last_error = ""
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{AI_BASE_URL}/chat/completions", headers=headers, json=payload
+                ) as resp:
+                    text = await resp.text()
 
-            # Try regular JSON first
-            try:
-                data = json_mod.loads(text)
-                return data["choices"][0]["message"]["content"].strip()
-            except json_mod.JSONDecodeError:
-                pass
-
-            # Parse SSE format
-            full_content = ""
-            for line in text.split("\n"):
-                line = line.strip()
-                if line.startswith("data: "):
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json_mod.loads(data_str)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            choice = chunk["choices"][0]
-                            if "delta" in choice and "content" in choice["delta"]:
-                                full_content += choice["delta"]["content"]
-                            elif "message" in choice and "content" in choice["message"]:
-                                full_content += choice["message"]["content"]
-                    except:
+                    if resp.status == 429:
+                        last_error = text[:500]
+                        logger.warning(f"429 Rate Limit (attempt {attempt+1}): {last_error}")
+                        # Kutish va retry
+                        wait = 5 * (attempt + 1)
+                        logger.info(f"{wait}s kutib retry...")
+                        await asyncio.sleep(wait)
                         continue
 
-            if full_content:
-                return full_content.strip()
+                    if resp.status != 200:
+                        raise RuntimeError(f"AI API xato {resp.status}: {text[:500]}")
 
-            raise RuntimeError(f"Javobni tushunish mumkin emas: {text[:500]}")
+                    # Try regular JSON first
+                    try:
+                        data = json_mod.loads(text)
+                        return data["choices"][0]["message"]["content"].strip()
+                    except json_mod.JSONDecodeError:
+                        pass
+
+                    # Parse SSE format
+                    full_content = ""
+                    for line in text.split("\n"):
+                        line = line.strip()
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json_mod.loads(data_str)
+                                if "choices" in chunk and len(chunk["choices"]) > 0:
+                                    choice = chunk["choices"][0]
+                                    if "delta" in choice and "content" in choice["delta"]:
+                                        full_content += choice["delta"]["content"]
+                                    elif "message" in choice and "content" in choice["message"]:
+                                        full_content += choice["message"]["content"]
+                            except:
+                                continue
+
+                    if full_content:
+                        return full_content.strip()
+
+                    raise RuntimeError(f"Javobni tushunish mumkin emas: {text[:500]}")
+
+        except RuntimeError:
+            raise
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"AI ulanish xatosi (attempt {attempt+1}): {e}")
+            await asyncio.sleep(3)
+
+    raise RuntimeError(f"AI 3 marta urinib bo'ldi, ishlamadi. Oxirgi xato: {last_error}")
 
 
 async def compress_memory(old_memory: str, user_msg: str, assistant_msg: str) -> str:
@@ -334,14 +370,18 @@ async def agent_execute(chat_id: int, user_request: str, memory: str) -> str:
 
 # ============== YORDAMCHI ==============
 async def send_long_message(message: Message, text: str):
-    if len(text) <= 4096:
-        await message.answer(text)
-    else:
-        filename = f"result_{datetime.now().strftime('%H%M%S')}.txt"
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(text)
-        await message.answer_document(FSInputFile(filename), caption="📄 Natija juda uzun")
-        os.remove(filename)
+    try:
+        if len(text) <= 4096:
+            await message.answer(text)
+        else:
+            filename = f"result_{datetime.now().strftime('%H%M%S')}.txt"
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(text)
+            await message.answer_document(FSInputFile(filename), caption="📄 Natija juda uzun")
+            os.remove(filename)
+    except Exception as e:
+        logger.error(f"send_long_message xato: {e}")
+        await message.answer(f"❌ Xabar yuborishda xato: {e}")
 
 
 # ============== VPS BOSHQARUV SKILL'LARI (PLACEHOLDER) ==============
@@ -372,160 +412,237 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    if not is_authenticated(message.chat.id):
-        await message.answer("🔐 Botdan foydalanish uchun parolni kiriting:")
-        return
-    await message.answer(
-        "👋 Xush kelibsiz!\n\n"
-        "✍️ Suhbatlashish uchun xabar yozing.\n"
-        "🤖 Agent rejimi: 'speedpro bot ni tekshir va tuzat' deb yozing\n"
-        "📁 /fayl <yo'l> - faylni o'qish\n"
-        "💻 /buyruq <command> - shell buyruq\n"
-        "🔍 /qidir <yo'l> <pattern> - kod qidirish"
-    )
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Botdan foydalanish uchun parolni kiriting:")
+            return
+        await message.answer(
+            "👋 Xush kelibsiz!\n\n"
+            "✍️ Suhbatlashish uchun xabar yozing.\n"
+            "🤖 Agent rejimi: 'speedpro bot ni tekshir va tuzat' deb yozing\n"
+            "📁 /fayl <yo'l> - faylni o'qish\n"
+            "💻 /buyruq <command> - shell buyruq\n"
+            "🔍 /qidir <yo'l> <pattern> - kod qidirish\n"
+            "📊 /status - bot holati"
+        )
+    except Exception as e:
+        logger.error(f"/start xato: {e}")
+        await message.answer("❌ Xatolik yuz berdi. Log: bot.log")
+
+
+@dp.message(Command("status"))
+async def cmd_status(message: Message):
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Avval parolni kiriting:")
+            return
+
+        # AI health check
+        ai_status = "✅ AI ulanish OK"
+        try:
+            await ai_chat([
+                {"role": "system", "content": "Hi"},
+                {"role": "user", "content": "Hi"}
+            ], temperature=0.1)
+        except Exception as e:
+            ai_status = f"❌ AI ulanishda muammo: {str(e)[:200]}"
+
+        mem_size = len(get_memory())
+
+        await message.answer(
+            f"📊 Bot holati:\n"
+            f"✅ Bot: Online\n"
+            f"{ai_status}\n"
+            f"🧠 Xotira hajmi: {mem_size} belgi\n"
+            f"💾 DB: {DB_PATH}"
+        )
+    except Exception as e:
+        logger.error(f"/status xato: {e}")
+        await message.answer(f"❌ Status olishda xato: {e}")
 
 
 @dp.message(Command("xotira"))
 async def cmd_memory(message: Message):
-    if not is_authenticated(message.chat.id):
-        await message.answer("🔐 Avval parolni kiriting:")
-        return
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📥 Yuklash", callback_data="download_memory")]
-        ]
-    )
-    await message.answer("🧠 Xotira bo'limi:", reply_markup=kb)
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Avval parolni kiriting:")
+            return
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📥 Yuklash", callback_data="download_memory")]
+            ]
+        )
+        await message.answer("🧠 Xotira bo'limi:", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"/xotira xato: {e}")
+        await message.answer(f"❌ Xatolik: {e}")
 
 
 @dp.callback_query(F.data == "download_memory")
 async def download_memory(callback: CallbackQuery):
-    if not is_authenticated(callback.message.chat.id):
-        await callback.answer("🔐 Avval parolni kiriting!", show_alert=True)
-        return
+    try:
+        if not is_authenticated(callback.message.chat.id):
+            await callback.answer("🔐 Avval parolni kiriting!", show_alert=True)
+            return
 
-    await callback.answer()
+        await callback.answer()
 
-    memory_text = get_memory()
-    if not memory_text.strip():
-        memory_text = "[Xotira hali bo'sh]"
+        memory_text = get_memory()
+        if not memory_text.strip():
+            memory_text = "[Xotira hali bo'sh]"
 
-    filename = f"memory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("=== ZICHLANGAN DOIMIY XOTIRA ===\n\n")
-        f.write(memory_text)
+        filename = f"memory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("=== ZICHLANGAN DOIMIY XOTIRA ===\n\n")
+            f.write(memory_text)
 
-    await callback.message.answer_document(
-        FSInputFile(filename), caption="🧠 Sizning zichlangan xotirangiz"
-    )
-    os.remove(filename)
+        await callback.message.answer_document(
+            FSInputFile(filename), caption="🧠 Sizning zichlangan xotirangiz"
+        )
+        os.remove(filename)
+    except Exception as e:
+        logger.error(f"download_memory xato: {e}")
+        await callback.message.answer(f"❌ Xatolik: {e}")
 
 
 @dp.message(Command("fayl"))
 async def cmd_file(message: Message):
-    if not is_authenticated(message.chat.id):
-        await message.answer("🔐 Avval parolni kiriting:")
-        return
-    args = message.text.split(" ", 1)
-    if len(args) < 2:
-        await message.answer("📁 Foydalanish: /fayl <yo'l>\nMasalan: /fayl /root/speedpro/bot.py")
-        return
-    result = await tool_read_file(args[1])
-    await send_long_message(message, result)
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Avval parolni kiriting:")
+            return
+        args = message.text.split(" ", 1)
+        if len(args) < 2:
+            await message.answer("📁 Foydalanish: /fayl <yo'l>\nMasalan: /fayl /root/speedpro/bot.py")
+            return
+        result = await tool_read_file(args[1])
+        await send_long_message(message, result)
+    except Exception as e:
+        logger.error(f"/fayl xato: {e}")
+        await message.answer(f"❌ Xatolik: {e}")
 
 
 @dp.message(Command("buyruq"))
 async def cmd_shell(message: Message):
-    if not is_authenticated(message.chat.id):
-        await message.answer("🔐 Avval parolni kiriting:")
-        return
-    args = message.text.split(" ", 1)
-    if len(args) < 2:
-        await message.answer("💻 Foydalanish: /buyruq <command>\nMasalan: /buyruq ls -la")
-        return
-    await message.answer("⏳ Buyruq bajarilmoqda...")
-    result = await tool_execute_shell(args[1])
-    await send_long_message(message, result)
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Avval parolni kiriting:")
+            return
+        args = message.text.split(" ", 1)
+        if len(args) < 2:
+            await message.answer("💻 Foydalanish: /buyruq <command>\nMasalan: /buyruq ls -la")
+            return
+        await message.answer("⏳ Buyruq bajarilmoqda...")
+        result = await tool_execute_shell(args[1])
+        await send_long_message(message, result)
+    except Exception as e:
+        logger.error(f"/buyruq xato: {e}")
+        await message.answer(f"❌ Xatolik: {e}")
 
 
 @dp.message(Command("qidir"))
 async def cmd_search(message: Message):
-    if not is_authenticated(message.chat.id):
-        await message.answer("🔐 Avval parolni kiriting:")
-        return
-    args = message.text.split(" ", 2)
-    if len(args) < 3:
-        await message.answer("🔍 Foydalanish: /qidir <yo'l> <pattern>\nMasalan: /qidir /root/speedpro def main")
-        return
-    result = await tool_search_code(args[1], args[2])
-    await send_long_message(message, result)
+    try:
+        if not is_authenticated(message.chat.id):
+            await message.answer("🔐 Avval parolni kiriting:")
+            return
+        args = message.text.split(" ", 2)
+        if len(args) < 3:
+            await message.answer("🔍 Foydalanish: /qidir <yo'l> <pattern>\nMasalan: /qidir /root/speedpro def main")
+            return
+        result = await tool_search_code(args[1], args[2])
+        await send_long_message(message, result)
+    except Exception as e:
+        logger.error(f"/qidir xato: {e}")
+        await message.answer(f"❌ Xatolik: {e}")
 
 
 @dp.message(F.text)
 async def handle_message(message: Message):
-    chat_id = message.chat.id
-    user_text = message.text
-
-    # Parol tekshiruvi
-    if not is_authenticated(chat_id):
-        if user_text == ADMIN_PASSWORD:
-            authenticated_chats.add(chat_id)
-            await message.answer(
-                "✅ Parol tasdiqlandi!\n\n"
-                "✍️ Suhbatlashish uchun xabar yozing.\n"
-                "🤖 Agent rejimi: 'speedpro bot ni tekshir va tuzat'\n"
-                "📁 /fayl <yo'l> - faylni o'qish\n"
-                "💻 /buyruq <command> - shell buyruq\n"
-                "🔍 /qidir <yo'l> <pattern> - kod qidirish"
-            )
-        else:
-            await message.answer("❌ Noto'g'ri parol. Qayta urinib ko'ring:")
-        return
-
-    old_memory = get_memory()
-
-    # Agent rejimini tekshirish
-    agent_keywords = ["tekshir", "tuzat", "xatoni top", "fix", "debug", "bajar", "yozib ber", "yarat", "yangil", "update", "o'qib ber"]
-    is_agent_request = any(kw in user_text.lower() for kw in agent_keywords) and len(user_text) > 10
-
-    if is_agent_request:
-        await message.answer("🤖 Agent ishga tushdi. Bu bir necha daqiqa olishi mumkin...")
-        try:
-            result = await agent_execute(chat_id, user_text, old_memory)
-            await send_long_message(message, result)
-
-            asyncio.create_task(
-                _background_compress_and_save(old_memory, user_text, result)
-            )
-        except Exception as e:
-            await message.answer(f"❌ Agent xatosi: {e}")
-        return
-
-    # Oddiy suhbat
-    mem_block = old_memory if old_memory else "[Hali xotira yo'q]"
-
-    system_prompt = (
-        "Siz foydalanuvchining shaxsiy yordamchisisiz. "
-        "Quyidagi matn sizning doimiy xotirangizdir. Unga asoslanib javob bering.\n\n"
-        f"XOTIRA:\n{mem_block}"
-    )
-
     try:
-        assistant_text = await ai_chat(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text},
-            ]
+        chat_id = message.chat.id
+        user_text = message.text
+
+        # Parol tekshiruvi
+        if not is_authenticated(chat_id):
+            if user_text == ADMIN_PASSWORD:
+                authenticated_chats.add(chat_id)
+                await message.answer(
+                    "✅ Parol tasdiqlandi!\n\n"
+                    "✍️ Suhbatlashish uchun xabar yozing.\n"
+                    "🤖 Agent rejimi: 'speedpro bot ni tekshir va tuzat'\n"
+                    "📁 /fayl <yo'l> - faylni o'qish\n"
+                    "💻 /buyruq <command> - shell buyruq\n"
+                    "🔍 /qidir <yo'l> <pattern> - kod qidirish\n"
+                    "📊 /status - bot holati"
+                )
+            else:
+                await message.answer("❌ Noto'g'ri parol. Qayta urinib ko'ring:")
+            return
+
+        old_memory = get_memory()
+
+        # Agent rejimini tekshirish
+        agent_keywords = ["tekshir", "tuzat", "xatoni top", "fix", "debug", "bajar", "yozib ber", "yarat", "yangil", "update", "o'qib ber"]
+        is_agent_request = any(kw in user_text.lower() for kw in agent_keywords) and len(user_text) > 10
+
+        if is_agent_request:
+            await message.answer("🤖 Agent ishga tushdi. Bu bir necha daqiqa olishi mumkin...")
+            try:
+                result = await agent_execute(chat_id, user_text, old_memory)
+                await send_long_message(message, result)
+
+                asyncio.create_task(
+                    _background_compress_and_save(old_memory, user_text, result)
+                )
+            except Exception as e:
+                logger.error(f"Agent xato: {e}")
+                await message.answer(f"❌ Agent xatosi: {e}")
+            return
+
+        # Oddiy suhbat
+        mem_block = old_memory if old_memory else "[Hali xotira yo'q]"
+
+        system_prompt = (
+            "Siz foydalanuvchining shaxsiy yordamchisisiz. "
+            "Quyidagi matn sizning doimiy xotirangizdir. Unga asoslanib javob bering.\n\n"
+            f"XOTIRA:\n{mem_block}"
+        )
+
+        try:
+            assistant_text = await ai_chat(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text},
+                ]
+            )
+        except RuntimeError as e:
+            if "429" in str(e) or "Rate limit" in str(e):
+                await message.answer(
+                    "⏳ AI hozircha band (Rate Limit).\n"
+                    "Iltimos, 1-2 daqiqa kutib qayta urinib ko'ring.\n\n"
+                    "📊 /status - bot holatini ko'rish\n"
+                    "🧠 /xotira - xotira bilan ishlash (AI talab qilmaydi)"
+                )
+            else:
+                await message.answer(f"❌ AI xatolik: {e}")
+            return
+        except Exception as e:
+            logger.error(f"AI suhbat xato: {e}")
+            await message.answer(f"❌ AI xatolik: {e}")
+            return
+
+        await send_long_message(message, assistant_text)
+
+        asyncio.create_task(
+            _background_compress_and_save(old_memory, user_text, assistant_text)
         )
     except Exception as e:
-        await message.answer(f"❌ AI xatolik: {e}")
-        return
-
-    await send_long_message(message, assistant_text)
-
-    asyncio.create_task(
-        _background_compress_and_save(old_memory, user_text, assistant_text)
-    )
+        logger.error(f"handle_message umumiy xato: {e}\n{traceback.format_exc()}")
+        try:
+            await message.answer("❌ Kutilmagan xatolik. Log: bot.log")
+        except:
+            pass
 
 
 async def _background_compress_and_save(
@@ -536,13 +653,13 @@ async def _background_compress_and_save(
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, update_memory, new_memory)
     except Exception as e:
-        print(f"[XOTIRA XATOSI] {datetime.now()}: {e}")
+        logger.error(f"[XOTIRA XATOSI] {datetime.now()}: {e}")
 
 
 # ============== MAIN ==============
 async def main():
     init_db()
-    print("✅ Bot ishga tushdi.")
+    logger.info("✅ Bot ishga tushdi.")
     await dp.start_polling(bot)
 
 
