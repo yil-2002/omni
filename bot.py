@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Shaxsiy AI Yordamchi v3.2 — Robust Edition
+Shaxsiy AI Yordamchi v4.0 — Robust Edition
 - Eski xotirani avtomatik import qiladi
 - AI sekin bo'lsa, foydalanuvchini xabardor qiladi
 - Mood analysis bloklamaydi (background'da)
-- Qisqa timeout (30s), kam retry (2 ta)
+- Qisqa timeout (30s), to'g'ri retry (3 ta urinish)
+- DB connection pooling/context manager
+- Eslatmalar va haftalik avtomatika ishlaydi
+- OWNER_CHAT_ID bazada saqlanadi
 
 Requirements:
     pip install aiogram aiohttp python-dotenv
@@ -20,7 +23,8 @@ import re
 import traceback
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Dict
+from contextlib import contextmanager
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
@@ -84,16 +88,16 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Yil-2002")
-AI_BASE_URL = os.getenv("AI_BASE_URL", "https://punctured-old-playmaker.ngrok-free.dev/v1")
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.openai.com/v1")
 AI_API_KEY = os.getenv("AI_API_KEY", "not-needed")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-DB_PATH = "memory.db"
+DB_PATH = os.getenv("DB_PATH", "memory.db")
 
 OWNER_CHAT_ID: Optional[int] = None
 
 MODELS = [
-    os.getenv("AI_MODEL", "openai/gpt-oss-120b"),
-    os.getenv("AI_MODEL_FALLBACK1", "openai/gpt-4o-mini"),
+    os.getenv("AI_MODEL", "gpt-4o-mini"),
+    os.getenv("AI_MODEL_FALLBACK1", "gpt-4o"),
     os.getenv("AI_MODEL_FALLBACK2", "anthropic/claude-3-haiku"),
 ]
 
@@ -125,182 +129,238 @@ def _get_cipher():
                 f.write(_ENCRYPTION_KEY)
     return Fernet(_ENCRYPTION_KEY)
 
+# ============== DB KONTEXT-MENEDJER ==============
+@contextmanager
+def get_conn():
+    """SQLite ulanishini xavfsiz boshqaruvchi context manager."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _exec(cur, sql: str, params=()):
+    """SQL buyruqni xavfsiz bajaradi va xatoliklarni log'ga yozadi."""
+    try:
+        cur.execute(sql, params)
+    except sqlite3.Error as e:
+        logger.error(f"SQL error: {e} | SQL: {sql} | Params: {params}")
+        raise
+
+
+# ============== SOZLAMALAR (persist) ==============
+def get_setting(key: str, default: str = "") -> str:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "SELECT value FROM settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else default
+
+
+def set_setting(key: str, value: str):
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+
+
 # ============== SQLITE BAZA + ESKI XOTIRA MIGRATSIYA ==============
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    with get_conn() as conn:
+        cur = conn.cursor()
 
-    # Yangi jadvallar
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-            content TEXT NOT NULL,
-            topic TEXT DEFAULT 'general',
-            mood_score REAL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Sozlamalar jadvali
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS daily_profile (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            profile_text TEXT NOT NULL DEFAULT '',
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Xabarlar jadvali
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+                content TEXT NOT NULL,
+                topic TEXT DEFAULT 'general',
+                mood_score REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS topics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT,
-            message_count INTEGER DEFAULT 0,
-            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Kunlik profil
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_profile (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                profile_text TEXT NOT NULL DEFAULT '',
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS mood_scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL,
-            score REAL NOT NULL,
-            note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Mavzular
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS topics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                message_count INTEGER DEFAULT 0,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS weekly_summaries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            week_start TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Kayfiyat ballari
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS mood_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                score REAL NOT NULL,
+                note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            content TEXT,
-            once_at TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Haftalik xulosalar
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS weekly_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                week_start TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    # ESKI XOTIRANI IMPORT QILISH (faqat bir marta)
-    try:
-        cur.execute("SELECT compressed_text FROM memory WHERE id = 1")
-        old_row = cur.fetchone()
-        if old_row and old_row[0] and old_row[0].strip():
-            old_text = old_row[0].strip()
-            # Tekshirish: allaqachon import qilinganmi?
-            cur.execute("SELECT COUNT(*) FROM messages WHERE role = 'system' AND content LIKE ?", ("%[ESKI XOTIRA]%",))
-            if cur.fetchone()[0] == 0:
+        # Eslatmalar
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT,
+                once_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # INDEXLAR — tezlik uchun
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_msg_chat_topic ON messages(chat_id, topic)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_msg_created ON messages(created_at)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(once_at)
+        """)
+
+        # ESKI XOTIRANI IMPORT QILISH (faqat bir marta)
+        try:
+            cur.execute("SELECT compressed_text FROM memory WHERE id = 1")
+            old_row = cur.fetchone()
+            if old_row and old_row[0] and old_row[0].strip():
+                old_text = old_row[0].strip()
                 cur.execute(
-                    "INSERT INTO messages (chat_id, role, content, topic) VALUES (?, ?, ?, ?)",
-                    (0, "system", f"[ESKI XOTIRA — AVVALGI BOTDAN]:\\n{old_text}", "general")
+                    "SELECT COUNT(*) FROM messages WHERE role = 'system' AND content LIKE ?",
+                    ("%[ESKI XOTIRA]%",)
                 )
-                logger.info(f"✅ Eski xotira import qilindi ({len(old_text)} belgi)")
-    except Exception as e:
-        logger.info(f"Eski xotira import (memory jadvali yo'q yoki bo'sh): {e}")
+                if cur.fetchone()[0] == 0:
+                    _exec(cur,
+                        "INSERT INTO messages (chat_id, role, content, topic) VALUES (?, ?, ?, ?)",
+                        (0, "system", f"[ESKI XOTIRA — AVVALGI BOTDAN]:\\n{old_text}", "general")
+                    )
+                    logger.info(f"✅ Eski xotira import qilindi ({len(old_text)} belgi)")
+        except Exception as e:
+            logger.info(f"Eski xotira import (memory jadvali yo'q yoki bo'sh): {e}")
 
-    cur.execute("INSERT OR IGNORE INTO daily_profile (id, profile_text) VALUES (1, '')")
-    cur.execute("INSERT OR IGNORE INTO topics (name, description) VALUES ('general', 'Umumiy suhbatlar')")
-    conn.commit()
-    conn.close()
-    logger.info("✅ Baza v3.2 initializatsiya qilindi")
+        _exec(cur, "INSERT OR IGNORE INTO daily_profile (id, profile_text) VALUES (1, '')")
+        _exec(cur, "INSERT OR IGNORE INTO topics (name, description) VALUES ('general', 'Umumiy suhbatlar')")
+        conn.commit()
+
+    logger.info("✅ Baza v4.0 initializatsiya qilindi (indexlar bilan)")
 
 
 def save_message(chat_id: int, role: str, content: str, topic: str = "general", mood: float = None):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO messages (chat_id, role, content, topic, mood_score) VALUES (?, ?, ?, ?, ?)",
-        (chat_id, role, content, topic, mood)
-    )
-    cur.execute(
-        "UPDATE topics SET message_count = message_count + 1, last_active = CURRENT_TIMESTAMP WHERE name = ?",
-        (topic,)
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "INSERT INTO messages (chat_id, role, content, topic, mood_score) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, role, content, topic, mood)
+        )
+        _exec(cur,
+            "UPDATE topics SET message_count = message_count + 1, last_active = CURRENT_TIMESTAMP WHERE name = ?",
+            (topic,)
+        )
+        conn.commit()
 
 
 def get_recent_messages(chat_id: int, limit: int = 50, topic: str = None) -> list:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    if topic and topic != "general":
-        cur.execute(
-            "SELECT role, content FROM messages WHERE chat_id = ? AND topic = ? ORDER BY id DESC LIMIT ?",
-            (chat_id, topic, limit)
-        )
-    else:
-        cur.execute(
-            "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
-            (chat_id, limit)
-        )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        if topic and topic != "general":
+            _exec(cur,
+                "SELECT role, content FROM messages WHERE chat_id = ? AND topic = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, topic, limit)
+            )
+        else:
+            _exec(cur,
+                "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, limit)
+            )
+        rows = cur.fetchall()
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
 
 def get_all_topics(chat_id: int) -> list:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT DISTINCT topic FROM messages WHERE chat_id = ? ORDER BY topic", (chat_id,))
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "SELECT DISTINCT topic FROM messages WHERE chat_id = ? ORDER BY topic", (chat_id,))
+        rows = cur.fetchall()
     return [r[0] for r in rows]
 
 
 def search_messages(chat_id: int, keyword: str) -> list:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT role, content, created_at FROM messages WHERE chat_id = ? AND content LIKE ? ORDER BY id DESC LIMIT 20",
-        (chat_id, f"%{keyword}%")
-    )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "SELECT role, content, created_at FROM messages WHERE chat_id = ? AND content LIKE ? ORDER BY id DESC LIMIT 20",
+            (chat_id, f"%{keyword}%")
+        )
+        rows = cur.fetchall()
     return rows
 
 
 def get_daily_profile() -> str:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT profile_text FROM daily_profile WHERE id = 1")
-    row = cur.fetchone()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "SELECT profile_text FROM daily_profile WHERE id = 1")
+        row = cur.fetchone()
     return row[0] if row else ""
 
 
 def update_daily_profile(text: str):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE daily_profile SET profile_text = ?, last_updated = CURRENT_TIMESTAMP WHERE id = 1",
-        (text,)
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "UPDATE daily_profile SET profile_text = ?, last_updated = CURRENT_TIMESTAMP WHERE id = 1",
+            (text,)
+        )
+        conn.commit()
 
 
 def get_stats(chat_id: int) -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ? AND role = 'user'", (chat_id,))
-    user_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ? AND role = 'assistant'", (chat_id,))
-    ai_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(DISTINCT topic) FROM messages WHERE chat_id = ?", (chat_id,))
-    topic_count = cur.fetchone()[0]
-    cur.execute("SELECT created_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1", (chat_id,))
-    last_msg = cur.fetchone()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "SELECT COUNT(*) FROM messages WHERE chat_id = ? AND role = 'user'", (chat_id,))
+        user_count = cur.fetchone()[0]
+        _exec(cur, "SELECT COUNT(*) FROM messages WHERE chat_id = ? AND role = 'assistant'", (chat_id,))
+        ai_count = cur.fetchone()[0]
+        _exec(cur, "SELECT COUNT(DISTINCT topic) FROM messages WHERE chat_id = ?", (chat_id,))
+        topic_count = cur.fetchone()[0]
+        _exec(cur, "SELECT created_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1", (chat_id,))
+        last_msg = cur.fetchone()
     return {
         "user_msgs": user_count,
         "ai_msgs": ai_count,
@@ -310,50 +370,55 @@ def get_stats(chat_id: int) -> dict:
 
 
 def get_mood_history(chat_id: int, days: int = 14) -> list:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    cur.execute(
-        "SELECT DATE(created_at), AVG(score), COUNT(*) FROM mood_scores WHERE chat_id = ? AND created_at >= ? GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
-        (chat_id, since)
-    )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        _exec(cur,
+            "SELECT DATE(created_at), AVG(score), COUNT(*) FROM mood_scores WHERE chat_id = ? AND created_at >= ? GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
+            (chat_id, since)
+        )
+        rows = cur.fetchall()
     return rows
 
 
 def save_mood(chat_id: int, score: float, note: str = ""):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO mood_scores (chat_id, score, note) VALUES (?, ?, ?)",
-        (chat_id, score, note)
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "INSERT INTO mood_scores (chat_id, score, note) VALUES (?, ?, ?)",
+            (chat_id, score, note)
+        )
+        conn.commit()
 
 
 def get_weekly_summary(week_start: str) -> Optional[str]:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT summary FROM weekly_summaries WHERE week_start = ?", (week_start,))
-    row = cur.fetchone()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "SELECT summary FROM weekly_summaries WHERE week_start = ?", (week_start,))
+        row = cur.fetchone()
     return row[0] if row else None
 
 
 def save_weekly_summary(week_start: str, summary: str):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO weekly_summaries (week_start, summary) VALUES (?, ?)",
-        (week_start, summary)
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "INSERT OR REPLACE INTO weekly_summaries (week_start, summary) VALUES (?, ?)",
+            (week_start, summary)
+        )
+        conn.commit()
 
 
-# ============== AI CLIENT (TEZKOR + KAM RETRY) ==============
+def load_owner_chat_id() -> Optional[int]:
+    val = get_setting("owner_chat_id", "")
+    return int(val) if val else None
+
+
+def persist_owner_chat_id(chat_id: int):
+    set_setting("owner_chat_id", str(chat_id))
+
+
+# ============== AI CLIENT (TO'G'RI RETRY + TIMEOUT) ==============
 async def ai_chat(messages: list, temperature: float = 0.7, max_tokens: int = 4000, model_idx: int = 0) -> str:
     if model_idx >= len(MODELS):
         raise RuntimeError("Barcha modellar ishlamadi. Keyinroq urinib ko'ring.")
@@ -371,23 +436,23 @@ async def ai_chat(messages: list, temperature: float = 0.7, max_tokens: int = 40
         "stream": False,
     }
 
-    # FAQAT 2 ta urinish (tezroq fail qilsin)
-    for attempt in range(2):
+    # 3 ta urinish har bir model uchun
+    for attempt in range(3):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{AI_BASE_URL}/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30)  # 30 soniya (avval 120 edi)
+                    timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:
                     text = await resp.text()
 
                     if resp.status == 429:
-                        wait = min(2 ** attempt * 2, 10)  # Maks 10 soniya
-                        logger.warning(f"[{model}] 429, {wait}s kutish...")
+                        wait = min(2 ** attempt * 2, 10)
+                        logger.warning(f"[{model}] 429, {wait}s kutish... (urinish {attempt+1})")
                         await asyncio.sleep(wait)
-                        continue
+                        continue  # Keyingi urinish
 
                     if resp.status != 200:
                         raise RuntimeError(f"AI API xato {resp.status}: {text[:300]}")
@@ -399,17 +464,23 @@ async def ai_chat(messages: list, temperature: float = 0.7, max_tokens: int = 40
                     raise RuntimeError("Bo'sh javob")
 
         except asyncio.TimeoutError:
-            logger.warning(f"[{model}] Timeout (30s)")
+            logger.warning(f"[{model}] Timeout (30s) — urinish {attempt+1}")
+            if attempt < 2:
+                await asyncio.sleep(min(2 ** attempt, 4))
+                continue
             break  # Keyingi modelga o'tish
         except Exception as e:
-            logger.warning(f"[{model}] xato: {e}")
+            logger.warning(f"[{model}] xato: {e} — urinish {attempt+1}")
+            if attempt < 2:
+                await asyncio.sleep(min(2 ** attempt, 4))
+                continue
             break  # Keyingi modelga o'tish
 
     # Keyingi modelga o'tish
     return await ai_chat(messages, temperature, max_tokens, model_idx + 1)
 
 
-# ============== MOOD ANALYSIS (BACKGROUND, BLOKLAMAYDI) ==============
+# ============== MOOD ANALYSIS (BACKGROUND) ==============
 async def analyze_mood_bg(chat_id: int, text: str):
     """Background'da kayfiyatni tahlil qiladi, javobni kutmaydi"""
     prompt = f"""Quyidagi matnning kayfiyatini -1 dan 1 gacha ball bilan baholang. FAQAT raqam.
@@ -477,22 +548,20 @@ async def run_code_sandbox(code: str) -> str:
 async def send_daily_backup(chat_id: int):
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT role, content, topic, mood_score, created_at FROM messages WHERE chat_id = ? AND DATE(created_at) = ? ORDER BY id",
-        (chat_id, yesterday)
-    )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "SELECT role, content, topic, mood_score, created_at FROM messages WHERE chat_id = ? AND DATE(created_at) = ? ORDER BY id",
+            (chat_id, yesterday)
+        )
+        rows = cur.fetchall()
 
     if not rows:
-        # Eski xotirani tekshirish
         old_msgs = get_recent_messages(chat_id, limit=1)
         if not old_msgs:
-            await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.\\nAfsuski, avvalgi suhbat ma'lumotlari mavjud emas.")
+            await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.\nAfsuski, avvalgi suhbat ma'lumotlari mavjud emas.")
             return
-        await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.\\nLekin avvalgi suhbatlar saqlangan. /tariz bilan ko'rishingiz mumkin.")
+        await bot.send_message(chat_id, f"📭 {yesterday} — suhbat bo'lmagan.\nLekin avvalgi suhbatlar saqlangan. /tarix bilan ko'rishingiz mumkin.")
         return
 
     history = "\n".join([f"{'👤' if r[0]=='user' else '🤖'} {r[1][:120]}" for r in rows])
@@ -541,14 +610,13 @@ async def send_weekly_analysis(chat_id: int):
         return
 
     since = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT role, content, created_at FROM messages WHERE chat_id = ? AND created_at >= ? ORDER BY id",
-        (chat_id, since)
-    )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "SELECT role, content, created_at FROM messages WHERE chat_id = ? AND created_at >= ? ORDER BY id",
+            (chat_id, since)
+        )
+        rows = cur.fetchall()
 
     if not rows:
         await bot.send_message(chat_id, "📭 Bu hafta suhbat bo'lmagan.")
@@ -657,14 +725,13 @@ async def export_encrypted(chat_id: int) -> Optional[str]:
     if cipher is None:
         return None
 
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT role, content, topic, mood_score, created_at FROM messages WHERE chat_id = ? ORDER BY id",
-        (chat_id,)
-    )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "SELECT role, content, topic, mood_score, created_at FROM messages WHERE chat_id = ? ORDER BY id",
+            (chat_id,)
+        )
+        rows = cur.fetchall()
 
     data = {
         "exported_at": datetime.now().isoformat(),
@@ -722,26 +789,85 @@ async def typing_indicator(chat_id: int):
             break
 
 
-# ============== CRON SCHEDULER ==============
-async def cron_scheduler():
+# ============== REMINDER WORKER ==============
+async def reminder_worker():
+    """Har 30 soniyada bazadagi eslatmalarni tekshiradi va yetib kelganlarini yuboradi."""
+    logger.info("⏰ Reminder worker ishga tushdi")
     while True:
-        now = datetime.now()
+        try:
+            now = datetime.utcnow().isoformat()
+            with get_conn() as conn:
+                cur = conn.cursor()
+                _exec(cur,
+                    "SELECT id, chat_id, title, content FROM reminders WHERE once_at <= ?",
+                    (now,)
+                )
+                due = cur.fetchall()
 
-        if now.hour == 9 and now.minute == 0 and OWNER_CHAT_ID:
-            try:
-                await send_daily_backup(OWNER_CHAT_ID)
-                await mirror_to_channel(f"📅 Daily backup: {now.strftime('%Y-%m-%d')}")
-            except Exception as e:
-                logger.error(f"Daily cron xato: {e}")
-            await asyncio.sleep(60)
+                for rid, cid, title, cnt in due:
+                    try:
+                        await bot.send_message(cid, f"🔔 {title}\n{cnt}")
+                    except Exception as e:
+                        logger.error(f"Eslatma yuborish xatosi (chat_id={cid}): {e}")
+                    _exec(cur, "DELETE FROM reminders WHERE id = ?", (rid,))
 
-        if now.weekday() == 0 and now.hour == 9 and now.minute == 30 and OWNER_CHAT_ID:
-            try:
-                await send_weekly_analysis(OWNER_CHAT_ID)
-                await mirror_to_channel(f"📊 Weekly analysis: {now.strftime('%Y-%m-%d')}")
-            except Exception as e:
-                logger.error(f"Weekly cron xato: {e}")
-            await asyncio.sleep(60)
+                if due:
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Reminder worker xatosi: {e}")
+
+        await asyncio.sleep(30)
+
+
+# ============== WEEKLY SUMMARY WORKER ==============
+async def weekly_summary_job():
+    """Har kuni 09:30 da tekshiradi, agar dushanba bo'lsa haftalik tahlil yuboradi."""
+    logger.info("📊 Weekly summary job ishga tushdi")
+    last_run = ""
+    while True:
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+
+            # Faqat dushanba 09:30 da va bir marta
+            if now.weekday() == 0 and now.hour == 9 and now.minute >= 30 and last_run != today_str:
+                owner = load_owner_chat_id()
+                if owner:
+                    try:
+                        await send_weekly_analysis(owner)
+                        await mirror_to_channel(f"📊 Weekly analysis: {today_str}")
+                    except Exception as e:
+                        logger.error(f"Weekly cron xato: {e}")
+                    last_run = today_str
+                    await asyncio.sleep(60)  # Keyingi minutga o'tish
+        except Exception as e:
+            logger.error(f"Weekly job xatosi: {e}")
+
+        await asyncio.sleep(30)
+
+
+# ============== CRON SCHEDULER (KUNDILIK) ==============
+async def cron_scheduler():
+    """Har kuni 09:00 da kunlik xotira yuboradi."""
+    logger.info("📅 Cron scheduler ishga tushdi")
+    last_run = ""
+    while True:
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+
+            if now.hour == 9 and now.minute >= 0 and last_run != today_str:
+                owner = load_owner_chat_id()
+                if owner:
+                    try:
+                        await send_daily_backup(owner)
+                        await mirror_to_channel(f"📅 Daily backup: {today_str}")
+                    except Exception as e:
+                        logger.error(f"Daily cron xato: {e}")
+                    last_run = today_str
+                    await asyncio.sleep(60)
+        except Exception as e:
+            logger.error(f"Cron scheduler xatosi: {e}")
 
         await asyncio.sleep(30)
 
@@ -773,6 +899,7 @@ async def cmd_start(message: Message):
         return
 
     OWNER_CHAT_ID = chat_id
+    persist_owner_chat_id(chat_id)
     stats = get_stats(chat_id)
     features = _feature_status()
 
@@ -911,16 +1038,16 @@ async def cmd_reminder(message: Message):
     date_str, time_str, reminder_text = parts[0], parts[1], parts[2]
 
     try:
+        # UTC+05:00 (O'zbekiston vaqti)
         once_at = f"{date_str}T{time_str}:00+05:00"
 
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO reminders (chat_id, title, content, once_at) VALUES (?, ?, ?, ?)",
-            (chat_id, reminder_text[:50], reminder_text, once_at)
-        )
-        conn.commit()
-        conn.close()
+        with get_conn() as conn:
+            cur = conn.cursor()
+            _exec(cur,
+                "INSERT INTO reminders (chat_id, title, content, once_at) VALUES (?, ?, ?, ?)",
+                (chat_id, reminder_text[:50], reminder_text, once_at)
+            )
+            conn.commit()
 
         await message.answer(f"✅ Eslatma saqlandi!\n📅 {date_str} {time_str}\n📝 {reminder_text}")
     except Exception as e:
@@ -969,14 +1096,13 @@ async def download_history(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     await callback.answer()
 
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT role, content, topic, mood_score, created_at FROM messages WHERE chat_id = ? ORDER BY id",
-        (chat_id,)
-    )
-    rows = cur.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur,
+            "SELECT role, content, topic, mood_score, created_at FROM messages WHERE chat_id = ? ORDER BY id",
+            (chat_id,)
+        )
+        rows = cur.fetchall()
 
     filename = f"full_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(filename, "w", encoding="utf-8") as f:
@@ -1033,11 +1159,10 @@ async def cmd_topic(message: Message):
     topic = args[1].strip().lower().replace(" ", "_")
     current_topics[chat_id] = topic
 
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic,))
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        _exec(cur, "INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic,))
+        conn.commit()
 
     await message.answer(f"✅ Yangi mavzu: '{topic}'\nUmumiy suhbatga qaytish: /mavzu general")
 
@@ -1177,6 +1302,7 @@ async def handle_message(message: Message):
         if user_text == ADMIN_PASSWORD:
             authenticated_chats.add(chat_id)
             OWNER_CHAT_ID = chat_id
+            persist_owner_chat_id(chat_id)
             await message.answer(
                 "✅ Parol tasdiqlandi!\n\n"
                 "👋 Xush kelibsiz, egam!\n"
@@ -1190,7 +1316,7 @@ async def handle_message(message: Message):
     if user_text.startswith("/"):
         return
 
-    # MOOD ANALYSIS — BACKGROUND'DA, BLOKLAMAYDI
+    # MOOD ANALYSIS — BACKGROUND'DA
     asyncio.create_task(analyze_mood_bg(chat_id, user_text))
 
     # Xabarni saqlash
@@ -1201,7 +1327,7 @@ async def handle_message(message: Message):
     profile = get_daily_profile()
     recent_msgs = get_recent_messages(chat_id, limit=30, topic=topic)
 
-    # Eski xotirani ham qo'shish (agar bor bo'lsa)
+    # Eski xotirani ham qo'shish
     old_memory_msgs = []
     for m in recent_msgs:
         if m['role'] == 'system' and '[ESKI XOTIRA' in m['content']:
@@ -1222,15 +1348,12 @@ Joriy mavzu: {topic}
 """
 
     messages = [{"role": "system", "content": system_prompt}]
-    # Eski xotirani birinchi qo'shish
     if old_memory_msgs:
         messages.extend(old_memory_msgs)
     messages.extend([m for m in recent_msgs if m['role'] != 'system'])
     messages.append({"role": "user", "content": user_text})
 
     typing_task = asyncio.create_task(typing_indicator(chat_id))
-
-    # AGAR 10 SONIYADAN KO'P KETSA, FOYDALANUVCHINI XABARDOR QILISH
     notify_task = asyncio.create_task(_notify_if_slow(chat_id))
 
     try:
@@ -1262,7 +1385,8 @@ Joriy mavzu: {topic}
 
     except RuntimeError as e:
         notify_task.cancel()
-        if "429" in str(e) or "band" in str(e).lower() or "Rate" in str(e):
+        err_str = str(e).lower()
+        if "429" in str(e) or "band" in err_str or "rate" in err_str or "limit" in err_str:
             await message.answer(
                 "⏳ AI hozircha band (Rate Limit).\n"
                 "Iltimos, 1-2 daqiqa kutib qayta urinib ko'ring.\n\n"
@@ -1294,9 +1418,20 @@ async def _notify_if_slow(chat_id: int):
 # ============== MAIN ==============
 async def main():
     init_db()
-    logger.info("✅ Bot ishga tushdi (v3.2 — Robust Edition)")
 
+    # OWNER_CHAT_ID ni bazadan tiklash
+    global OWNER_CHAT_ID
+    OWNER_CHAT_ID = load_owner_chat_id()
+    if OWNER_CHAT_ID:
+        authenticated_chats.add(OWNER_CHAT_ID)
+        logger.info(f"✅ Owner chat_id tiklandi: {OWNER_CHAT_ID}")
+
+    logger.info("✅ Bot ishga tushdi (v4.0 — Robust Edition)")
+
+    # Background vazifalar
+    asyncio.create_task(reminder_worker())
     asyncio.create_task(cron_scheduler())
+    asyncio.create_task(weekly_summary_job())
 
     await dp.start_polling(bot)
 
