@@ -265,6 +265,13 @@ async def init_db():
         await conn.execute("INSERT OR IGNORE INTO daily_profile (id, profile_text) VALUES (1, '')")
         await conn.execute("INSERT OR IGNORE INTO topics (name, description) VALUES ('general', 'Umumiy suhbatlar')")
 
+        # MIGRATSIYA: eski 'reminders' jadvalida 'sent' ustuni bo'lmasligi mumkin
+        cur = await conn.execute("PRAGMA table_info(reminders)")
+        cols = [row[1] for row in await cur.fetchall()]
+        if "sent" not in cols:
+            await conn.execute("ALTER TABLE reminders ADD COLUMN sent INTEGER NOT NULL DEFAULT 0")
+            logger.info("✅ Migratsiya: reminders.sent ustuni qo'shildi")
+
         # ESKI BOTDAN XOTIRANI BIR MARTA IMPORT QILISH (agar eski 'memory' jadvali mavjud bo'lsa)
         try:
             cur = await conn.execute("SELECT compressed_text FROM memory WHERE id = 1")
