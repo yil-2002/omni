@@ -8,7 +8,7 @@ Minimal requirements:
     pip install aiogram aiohttp python-dotenv aiosqlite
 
 Qo'shimcha (ixtiyoriy):
-    pip install gtts matplotlib cryptography
+    pip install gtts matplotlib cryptography scikit-learn
 
 .env namunasi:
     BOT_TOKEN=...
@@ -45,6 +45,8 @@ from dotenv import load_dotenv
 _gtts = None
 _matplotlib = None
 _Fernet = None
+_sklearn_tfidf = None
+_sklearn_cosine = None
 
 
 def _get_gtts():
@@ -80,6 +82,19 @@ def _get_fernet():
         except ImportError:
             pass
     return _Fernet
+
+
+def _get_tfidf():
+    global _sklearn_tfidf, _sklearn_cosine
+    if _sklearn_tfidf is None:
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity
+            _sklearn_tfidf = TfidfVectorizer
+            _sklearn_cosine = cosine_similarity
+        except ImportError:
+            pass
+    return _sklearn_tfidf, _sklearn_cosine
 
 
 # ============== LOGGING ==============
@@ -476,6 +491,45 @@ async def get_full_history(chat_id: int) -> list:
         return await cur.fetchall()
 
 
+async def search_relevant_history(chat_id: int, query: str, exclude_last_n: int = 12, top_k: int = 5) -> list:
+    """TF-IDF asosida butun tarixdan so'rovga eng mos keladigan eski xabarlarni topadi.
+    Bu oxirgi N xabardan tashqaridagi (eskirоq) suhbatlarni qamrab oladi — 'uzoq muddatli xotira'."""
+    TfidfVectorizer, cosine_similarity = _get_tfidf()
+    if TfidfVectorizer is None:
+        return []
+
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT id, role, content, created_at FROM messages WHERE chat_id = ? AND role IN ('user','assistant') ORDER BY id",
+            (chat_id,)
+        )
+        rows = await cur.fetchall()
+
+    if len(rows) <= exclude_last_n + 3:
+        return []
+
+    # Oxirgi N tasi allaqachon asosiy kontekstda bor — ularni chiqarib tashlaymiz
+    candidates = rows[:-exclude_last_n] if exclude_last_n else rows
+    if len(candidates) < 3:
+        return []
+
+    texts = [r[2] for r in candidates]
+    try:
+        vectorizer = TfidfVectorizer(max_features=3000)
+        matrix = vectorizer.fit_transform(texts + [query])
+        sims = cosine_similarity(matrix[-1], matrix[:-1])[0]
+        top_idx = sims.argsort()[::-1][:top_k]
+        results = []
+        for i in top_idx:
+            if sims[i] > 0.05:  # butunlay bog'liqsizlarni filtrlash
+                r = candidates[i]
+                results.append({"role": r[1], "content": r[2], "created_at": r[3]})
+        return results
+    except Exception as e:
+        logger.debug(f"TF-IDF qidiruv xatosi: {e}")
+        return []
+
+
 async def get_messages_since(chat_id: int, since: str) -> list:
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
@@ -798,17 +852,17 @@ async def generate_mood_chart(chat_id: int) -> Optional[str]:
 
 # ============== LEARNING PROFILE ==============
 async def update_learning_profile(chat_id: int):
-    recent = await get_recent_messages(chat_id, limit=50)
+    recent = await get_recent_messages(chat_id, limit=40)
     if len(recent) < 5:
         return
 
     old_profile = await get_daily_profile()
     history_text = "\n".join([
-        f"{'User' if m['role'] == 'user' else 'AI'}: {m['content'][:200]}"
-        for m in recent[-20:]
+        f"{'User' if m['role'] == 'user' else 'AI'}: {m['content'][:250]}"
+        for m in recent[-30:]
     ])
 
-    prompt = f"""Siz foydalanuvchining shaxsiy AI yordamchisisiz. Quyidagi suhbatlar asosida FOYDALANUVCHI HAQIDA yangi ma'lumotlarni o'rganing va mavjud profilni yangilang.
+    prompt = f"""Siz foydalanuvchining shaxsiy AI yordamchisisiz. Quyidagi suhbatlar asosida FOYDALANUVCHI HAQIDA yangi ma'lumotlarni o'rganing va mavjud profilni YANGILANG (eskisini o'chirmang, faqat yangi ma'lumot bilan boyiting).
 
 ESKI PROFIL:
 {old_profile if old_profile else '[Hali profil yoq]'}
@@ -817,23 +871,79 @@ OXIRGI SUHBATLAR:
 {history_text}
 
 QOIDALAR:
-1. Foydalanuvchining ishtirok etgan loyihalari, texnologiyalar, qiziqishlari
-2. Uning xususiy xohishlari (qisqa javob, batafsil, o'zbek tilida, va h.k.)
-3. Vaqt rejimi, faol soatlari
-4. Oldingi topshiriqlardan o'rganilgan darslar
-5. HECH QANDAY izohsiz, FAQAT profil matnini chiqaring
+1. Profilni QUYIDAGI TUZILGAN FORMATDA yozing (bo'limlarni saqlang, faqat mazmunni yangilang):
+
+## LOYIHALAR VA TEXNOLOGIYALAR
+(foydalanuvchi ishtirok etgan loyihalar, texnologiyalar, VPS/server tafsilotlari va h.k.)
+
+## AFZALLIKLAR VA USLUB
+(qisqa/batafsil javob, til, muloqot uslubi va h.k.)
+
+## MUHIM FAKTLAR
+(ism, kasb, doimiy takrorlanadigan mavzular, hal qilingan muammolar)
+
+## FAOL VAQT VA ODATLAR
+(qachon faol, qanday so'rovlarni ko'p beradi)
+
+2. Eski ma'lumotni O'CHIRMANG, faqat eskirgan/o'zgargan qismini yangilang, yangi faktlarni qo'shing
+3. HECH QANDAY qo'shimcha izohsiz, FAQAT profil matnini chiqaring (yuqoridagi 4 bo'lim bilan)
 
 YANGI PROFIL:"""
 
     try:
         new_profile = await ai_chat([
-            {"role": "system", "content": "Siz profil analizchisisiz. Faqat profil matnini chiqaring."},
+            {"role": "system", "content": "Siz profil analizchisisiz. Faqat tuzilgan profil matnini chiqaring."},
             {"role": "user", "content": prompt}
-        ], temperature=0.3, max_tokens=2000)
+        ], temperature=0.3, max_tokens=2500)
         await update_daily_profile(new_profile)
         logger.info("✅ Learning profile yangilandi")
     except Exception as e:
         logger.error(f"Profil yangilash xatosi: {e}")
+
+
+async def deep_memory_compress(chat_id: int):
+    """Haftalik chuqur siqish: BUTUN tarixni katta kontekstli modelga berib,
+    profilni to'liq qayta yozdiradi — hech qanday ma'lumot yo'qolmasligi uchun."""
+    rows = await get_full_history(chat_id)
+    if len(rows) < 15:
+        return
+
+    old_profile = await get_daily_profile()
+    # Katta hajmdagi tarixni ham cheklab yuboramiz (token limitidan chiqmaslik uchun)
+    history_text = "\n".join([
+        f"{'User' if r[0] == 'user' else 'AI' if r[0] == 'assistant' else 'SYSTEM'}: {r[1][:300]}"
+        for r in rows[-200:]
+    ])
+
+    prompt = f"""Siz foydalanuvchining BUTUN suhbat tarixini tahlil qilib, uning haqida ENG TO'LIQ va ZICH profilni yaratishingiz kerak.
+
+ESKI PROFIL (saqlanishi kerak bo'lgan ma'lumotlar):
+{old_profile if old_profile else '[Hali profil yoq]'}
+
+BUTUN TARIX (oxirgi 200 xabar):
+{history_text}
+
+VAZIFA: Yuqoridagi barcha ma'lumotni birlashtirib, hech narsani yo'qotmasdan, quyidagi tuzilgan formatda ENG TO'LIQ profilni yozing:
+
+## LOYIHALAR VA TEXNOLOGIYALAR
+## AFZALLIKLAR VA USLUB
+## MUHIM FAKTLAR
+## FAOL VAQT VA ODATLAR
+## TARIX BO'YICHA XULOSA (qisqa, lekin barcha muhim voqealarni qamrab oladi)
+
+FAQAT profil matnini chiqaring, izohsiz."""
+
+    try:
+        # Katta kontekstli model bilan (agar mavjud bo'lsa) — chuqur tahlil uchun
+        big_model = os.getenv("AI_MODEL_BIG_CONTEXT", MODELS[0])
+        new_profile = await ai_chat([
+            {"role": "system", "content": "Siz chuqur profil-siqish tizimisiz. Faqat tuzilgan profil matnini chiqaring."},
+            {"role": "user", "content": prompt}
+        ], temperature=0.2, max_tokens=3500, model_idx=0)
+        await update_daily_profile(new_profile)
+        logger.info(f"✅ Haftalik chuqur xotira siqish bajarildi (chat_id={chat_id})")
+    except Exception as e:
+        logger.error(f"Chuqur xotira siqish xatosi: {e}")
 
 
 # ============== ENCRYPTED EXPORT ==============
@@ -938,6 +1048,7 @@ async def cron_scheduler():
             for chat_id in list(authenticated_chats):
                 try:
                     await send_weekly_analysis(chat_id)
+                    await deep_memory_compress(chat_id)
                     await mirror_to_channel(f"📊 Weekly analysis: {today}")
                 except Exception as e:
                     logger.error(f"Weekly cron xato ({chat_id}): {e}")
@@ -960,6 +1071,7 @@ def _feature_status() -> str:
     features.append(f"🔊 Voice (gTTS): {'✅' if _get_gtts() else '❌ pip install gtts'}")
     features.append(f"📊 Charts (matplotlib): {'✅' if _get_matplotlib() else '❌ pip install matplotlib'}")
     features.append(f"🔐 Encrypt (cryptography): {'✅' if _get_fernet() else '❌ pip install cryptography'}")
+    features.append(f"🧠 Uzoq muddatli xotira (scikit-learn): {'✅' if _get_tfidf()[0] else '❌ pip install scikit-learn'}")
     features.append(f"📡 Mirror: {'✅' if CHANNEL_ID else '❌ CHANNEL_ID yoq'}")
     return "\n".join(features)
 
@@ -1023,6 +1135,7 @@ async def cmd_start(message: Message):
         f"/eslatma <YYYY-MM-DD> <HH:MM> <matn> — Eslatma qo'shish\n"
         f"/haftalik — Haftalik chuqur tahlil\n"
         f"/xotira — Kunlik xotira (qo'lda)\n"
+        f"/chuqurxotira — Butun tarixni chuqur siqish (qo'lda)\n"
         f"/export — Shifrlangan eksport\n"
         f"/stikerid — Forward qilingan stikerning file_id'sini ko'rsatadi\n"
         f"/clear — Sessiyani tozalash\n"
@@ -1312,6 +1425,16 @@ async def cmd_memory(message: Message):
     await send_daily_backup(chat_id)
 
 
+@dp.message(Command("chuqurxotira"))
+async def cmd_deep_memory(message: Message):
+    chat_id = message.chat.id
+    if not is_authenticated(chat_id):
+        return
+    await message.answer("🧠 Butun tarix chuqur tahlil qilinib, profil qayta yozilmoqda... Bu biroz vaqt olishi mumkin.")
+    await deep_memory_compress(chat_id)
+    await message.answer("✅ Chuqur xotira siqish yakunlandi. /men orqali yangi profilni ko'ring.")
+
+
 @dp.message(Command("export"))
 async def cmd_export(message: Message):
     chat_id = message.chat.id
@@ -1442,6 +1565,16 @@ async def handle_message(message: Message):
     if len(profile) > 1500:
         profile = profile[:1500] + "... [qisqartirildi]"
 
+    # UZOQ MUDDATLI XOTIRA: butun tarixdan hozirgi savolga mos keladigan eski xabarlarni topamiz
+    relevant_history = await search_relevant_history(chat_id, user_text, exclude_last_n=12, top_k=5)
+    relevant_text = ""
+    if relevant_history:
+        relevant_text = "\n\nESKI SUHBATLARDAN BOG'LIQ QISMLAR (uzoq muddatli xotiradan topildi):\n"
+        for m in relevant_history:
+            role_label = "Foydalanuvchi" if m["role"] == "user" else "Siz"
+            content = m["content"][:300]
+            relevant_text += f"[{m['created_at']}] {role_label}: {content}\n"
+
     system_prompt = f"""Siz foydalanuvchining SHAXSIY va YAQIN AI yordamchisisiz.
 
 SIZNING VAZIFALARINGIZ:
@@ -1449,10 +1582,11 @@ SIZNING VAZIFALARINGIZ:
 2. Uning so'rovlari ustida FOCUS qiling, boshqa narsalarga chalg'imang
 3. O'zbek tilida javob bering (agar boshqa til talab qilinmasa)
 4. Qisqa va aniq bo'ling, lekin kerakli ma'lumotni to'liq bering
+5. Agar pastda "ESKI SUHBATLARDAN BOG'LIQ QISMLAR" bo'limi bo'lsa, undan albatta foydalaning — bu sizning uzoq muddatli xotirangiz, foydalanuvchi avval nima haqida gaplashganini eslatib turadi
 
 SIZNING PROFILINGIZ:
 {profile if profile else '[Hali profil shakllanmagan]'}
-
+{relevant_text}
 Joriy mavzu: {topic}
 """
 
@@ -1469,8 +1603,9 @@ Joriy mavzu: {topic}
         notify_task.cancel()
         await save_message(chat_id, "assistant", assistant_text, topic)
 
+        # Profilni yangilash (har 10 xabardan keyin — zichroq xotira uchun)
         stats = await get_stats(chat_id)
-        if (stats['user_msgs'] + stats['ai_msgs']) % 20 == 0:
+        if (stats['user_msgs'] + stats['ai_msgs']) % 10 == 0:
             asyncio.create_task(update_learning_profile(chat_id))
 
         if chat_id in voice_mode:
