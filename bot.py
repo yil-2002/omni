@@ -1434,7 +1434,13 @@ async def handle_message(message: Message):
     asyncio.create_task(analyze_mood_bg(chat_id, user_msg_id, user_text))
 
     profile = await get_daily_profile()
-    recent_msgs = await get_recent_messages(chat_id, limit=30, topic=topic)
+    recent_msgs = await get_recent_messages(chat_id, limit=12, topic=topic)
+    # Har bir xabarni ham cheklab qo'yamiz — token limitidan chiqib ketmaslik uchun
+    for m in recent_msgs:
+        if len(m["content"]) > 1500:
+            m["content"] = m["content"][:1500] + "... [qisqartirildi]"
+    if len(profile) > 1500:
+        profile = profile[:1500] + "... [qisqartirildi]"
 
     system_prompt = f"""Siz foydalanuvchining SHAXSIY va YAQIN AI yordamchisisiz.
 
