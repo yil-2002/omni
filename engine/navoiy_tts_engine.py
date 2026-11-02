@@ -376,13 +376,13 @@ def mux_navoiy_voice_onto_mp4(
         fx_wav = td / "fx_bed.wav"
         build_fx_for_cuts(v_dur, cuts or [], str(fx_wav), lufs_target=-16.0)
 
-        # Pad voiceover with silence at tail so it matches exact video duration without abrupt cutoff,
-        # ducking FX bed to 0.11 (-19 dB) under spoken Uzbek narration!
+        # Preserve exact `0.000s` voiceover sample phase (already calibrated to `-14.6 LUFS`!)
+        # by summing foreground `vo` (`weight 1.0`) + subtle UI `fx` (`weight 0.11`) without single-pass loudnorm pump!
         filter_c = (
-            f"[1:a]{tempo_filter}apad=whole_dur={v_dur:.3f},volume=1.0[vo];"
-            f"[2:a]volume=0.11[fx];"
-            f"[vo][fx]amix=inputs=2:duration=first:dropout_transition=0,"
-            f"loudnorm=I=-14.5:TP=-1.2:LRA=9[aout]"
+            f"[1:a]{tempo_filter}apad=whole_dur={v_dur:.3f},volume=0.86[vo];"
+            f"[2:a]volume=0.10[fx];"
+            f"[vo][fx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+            f"alimiter=limit=0.86:level=disabled:attack=5:release=50[aout]"
         )
         out_mp4.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(

@@ -487,7 +487,25 @@ def segment_uzbek_english_bilingual(text: str) -> list[tuple[str, str]]:
             lat.append(ch)
     s = "".join(lat)
 
-    # 1. Convert bound-suffixed English stems (`Apple'ning` -> `Epilning`, `Bloomberg'dan` -> `Blumbergdan`)
+    # 0. Cleanly expand common brand + Uzbek suffix (`Apple'ning` -> `Apple kompaniyasining`, `iPhone'da` -> `iPhone modelida`)
+    #    so BOTH the Bilingual Twin Voice AND Harfma-Harf Subtitles keep 100% pure brand spelling & pronunciation!
+    _brand_noun_map = [
+        (r"\b(Apple|OpenAI|Anthropic|Google|Microsoft|Nvidia|Tesla|Meta|Samsung|Amazon|SpaceX)['\-](ning)\b", r"\1 kompaniyasining"),
+        (r"\b(Apple|OpenAI|Anthropic|Google|Microsoft|Nvidia|Tesla|Meta|Samsung|Amazon|SpaceX)['\-](da)\b", r"\1 kompaniyasida"),
+        (r"\b(Apple|OpenAI|Anthropic|Google|Microsoft|Nvidia|Tesla|Meta|Samsung|Amazon|SpaceX)['\-](ga)\b", r"\1 kompaniyasiga"),
+        (r"\b(Apple|OpenAI|Anthropic|Google|Microsoft|Nvidia|Tesla|Meta|Samsung|Amazon|SpaceX)['\-](dan)\b", r"\1 kompaniyasidan"),
+        (r"\b(Bloomberg|Reuters|Forbes|TechCrunch)['\-](ning)\b", r"\1 nashrining"),
+        (r"\b(Bloomberg|Reuters|Forbes|TechCrunch)['\-](da)\b", r"\1 nashrida"),
+        (r"\b(iPhone|iPad|MacBook|Galaxy)['\-](da)\b", r"\1 qurilmasida"),
+        (r"\b(iPhone|iPad|MacBook|Galaxy)['\-](ning)\b", r"\1 qurilmasining"),
+        (r"\b(ChatGPT|Claude|Gemini|DeepSeek|Siri)['\-](da)\b", r"\1 tizimida"),
+        (r"\b(ChatGPT|Claude|Gemini|DeepSeek|Siri)['\-](ni)\b", r"\1 tizimini"),
+        (r"\b(ChatGPT|Claude|Gemini|DeepSeek|Siri)['\-](ning)\b", r"\1 tizimining"),
+    ]
+    for b_pat, b_rep in _brand_noun_map:
+        s = re.sub(b_pat, b_rep, s, flags=re.IGNORECASE)
+
+    # 1. Convert any remaining bound-suffixed English stems (`GitHub'dan` -> `GitXabdan`)
     def _fix_bound_suffix(m: re.Match) -> str:
         full_tok = m.group(0)
         stem, sfx = m.group(1), m.group(2)

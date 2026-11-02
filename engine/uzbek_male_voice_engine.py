@@ -161,23 +161,34 @@ async def _synth_bilingual_uzbek_english_hd(
     text: str,
     out_wav: Path,
     speed: float = 1.0,
+    beat_texts: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Synthesizes seamless bilingual Uzbek + English studio voiceover ($0, 0 MB extra RAM!):
     - Uzbek clauses -> `uz-UZ-SardorNeural` (`0Hz` = `115.9 Hz` pure unwarped Uzbek male).
     - English brands/terms -> `en-US-ChristopherNeural` (`+2Hz` = `115.5 Hz` acoustic twin brother,
-      EQ-matched `-1.2 dB @ 4.2 kHz` + active-RMS matched to `-19 dBFS`).
-    - Captures hardware-exact `WordBoundary` (`100ns` precision) timestamps across every Uzbek &
-      English word so Kinetic Pop subtitles lock with `±5ms` accuracy without loading Whisper!
+      EQ-matched `-1.2 dB @ 4.2 kHz` + active-RMS matched to `-18 dBFS`).
+    - When `beat_texts` is provided (`[hook_text, scene1_text, scene2_text, ...]`), tracks exact
+      sample-locked `beat_timings` for every scene so visual cards cut at the exact millisecond!
+    - Restores punctuation onto hardware-exact `WordBoundary` (`100ns` precision) tokens so
+      Kinetic Pop subtitles match 100% harfma-harf (letter-for-letter & millisecond-for-millisecond)!
     """
     import edge_tts
     import numpy as np
     import soundfile as sf
 
     ffmpeg_bin = get_ffmpeg_bin()
-    spans = segment_uzbek_english_bilingual(text)
-    if not spans:
-        spans = [("uz", _prepare_uzbek_for_sardor(text))]
+    clean_beats = [b.strip() for b in (beat_texts or []) if b and b.strip()]
+    beat_spans: list[tuple[int, str, str, bool]] = []  # (beat_idx, lang, chunk, is_last_in_beat)
+    if clean_beats:
+        for b_idx, b_str in enumerate(clean_beats):
+            sp_list = segment_uzbek_english_bilingual(b_str) or [("uz", _prepare_uzbek_for_sardor(b_str))]
+            for s_i, (lg, ch) in enumerate(sp_list):
+                beat_spans.append((b_idx, lg, ch, s_i == len(sp_list) - 1))
+    else:
+        sp_list = segment_uzbek_english_bilingual(text) or [("uz", _prepare_uzbek_for_sardor(text))]
+        for s_i, (lg, ch) in enumerate(sp_list):
+            beat_spans.append((0, lg, ch, s_i == len(sp_list) - 1))
 
     sr_hz = 48000
     uz_rate = f"{int(round((speed - 1.0) * 100)) + 5:+d}%"
@@ -228,8 +239,6 @@ async def _synth_bilingual_uzbek_english_hd(
                 )
                 y_raw, _ = sf.read(str(wav_p), dtype="float32")
 
-                # Gentle NumPy edge trim (`0.002` = `-54 dBFS`, `32ms` head pad + `75ms` tail pad)
-                # so initial plosives (B/P/T/D) AND trailing consonants (-g, -l, -s, -ra) NEVER clip!
                 nz = np.where(np.abs(y_raw) > 0.002)[0]
                 if len(nz) >= 32:
                     pad_head = int(sr_hz * 0.032)
@@ -242,7 +251,6 @@ async def _synth_bilingual_uzbek_english_hd(
                     seg = y_raw.copy()
                     trim_lead_s = 0.0
 
-                # Active-speech RMS match (`0.125` = `-18 dBFS`) across Uzbek & English twin voices
                 act = seg[np.abs(seg) > 0.015]
                 rms = float(np.sqrt(np.mean(act ** 2))) if len(act) > 80 else 0.1
                 seg *= (0.125 / max(0.02, rms))
@@ -253,19 +261,31 @@ async def _synth_bilingual_uzbek_english_hd(
                     seg[:fade] *= ramp
                     seg[-fade:] *= ramp[::-1]
 
+                # Re-attach original punctuation (`,`, `.`, `!`, `?`, `:`, `;`) & clean Uzbek apostrophe (`‘`)
+                # onto each exact `WordBoundary` token so Kinetic Pop subtitles match 100% harfma-harf!
                 seg_dur_s = len(seg) / float(sr_hz)
                 adj_wbs: list[tuple[str, float, float]] = []
+                scan_pos = 0
                 for w_txt, w_off, w_dur in raw_wbs:
                     if not w_txt:
                         continue
+                    punc_suffix = ""
+                    found_at = speak_txt.find(w_txt, scan_pos)
+                    if found_at != -1:
+                        after_pos = found_at + len(w_txt)
+                        while after_pos < len(speak_txt) and speak_txt[after_pos] in ",.!?:;»”":
+                            punc_suffix += speak_txt[after_pos]
+                            after_pos += 1
+                        scan_pos = after_pos
+                    pretty_w = w_txt.replace("ʻ", "‘").replace("ʼ", "’") + punc_suffix
                     ls = max(0.0, w_off - trim_lead_s)
                     le = min(seg_dur_s, max(ls + 0.04, ls + w_dur))
-                    adj_wbs.append((w_txt, ls, le))
+                    adj_wbs.append((pretty_w, ls, le))
 
                 return seg, adj_wbs
 
         rendered = await asyncio.gather(*[
-            _render_span(idx, lg, ch) for idx, (lg, ch) in enumerate(spans)
+            _render_span(idx, lg, ch) for idx, (_, lg, ch, _) in enumerate(beat_spans)
         ])
 
         lead_pad = np.zeros(int(sr_hz * 0.045), dtype=np.float32)
@@ -273,11 +293,18 @@ async def _synth_bilingual_uzbek_english_hd(
         cursor_samples = len(lead_pad)
         acoustic_words: list[dict[str, Any]] = []
         sentence_spans: list[dict[str, Any]] = []
+        beat_bounds: dict[int, list[float]] = {}
 
-        for (lg, raw_ch), (seg, adj_wbs) in zip(spans, rendered):
+        for (b_idx, lg, raw_ch, is_last_in_beat), (seg, adj_wbs) in zip(beat_spans, rendered):
             span_t0 = cursor_samples / float(sr_hz)
             span_t1 = (cursor_samples + len(seg)) / float(sr_hz)
+            if b_idx not in beat_bounds:
+                beat_bounds[b_idx] = [span_t0, span_t1]
+            else:
+                beat_bounds[b_idx][1] = span_t1
+
             sentence_spans.append({
+                "beat": b_idx,
                 "lang": lg,
                 "orig_text": raw_ch,
                 "start": round(span_t0, 3),
@@ -287,6 +314,7 @@ async def _synth_bilingual_uzbek_english_hd(
                 for w_txt, ls, le in adj_wbs:
                     acoustic_words.append({
                         "word": w_txt,
+                        "beat": b_idx,
                         "start": round(span_t0 + ls, 3),
                         "end": round(span_t0 + le, 3),
                     })
@@ -297,6 +325,7 @@ async def _synth_bilingual_uzbek_english_hd(
                     for ti, tk in enumerate(toks):
                         acoustic_words.append({
                             "word": tk,
+                            "beat": b_idx,
                             "start": round(span_t0 + ti * step, 3),
                             "end": round(span_t0 + (ti + 1) * step, 3),
                         })
@@ -304,10 +333,11 @@ async def _synth_bilingual_uzbek_english_hd(
             master_parts.append(seg)
             cursor_samples += len(seg)
 
-            # Punctuation-aware natural breath pause (`155ms` sentence end, `80ms` comma, `18ms` mid-clause glide)
             stripped = raw_ch.rstrip()
-            if stripped.endswith((".", "!", "?")):
-                p_sec = 0.155
+            if is_last_in_beat:
+                p_sec = 0.200
+            elif stripped.endswith((".", "!", "?")):
+                p_sec = 0.150
             elif stripped.endswith((",", ":", ";", "—", "–")):
                 p_sec = 0.080
             else:
@@ -315,6 +345,8 @@ async def _synth_bilingual_uzbek_english_hd(
             p_arr = np.zeros(int(sr_hz * p_sec), dtype=np.float32)
             master_parts.append(p_arr)
             cursor_samples += len(p_arr)
+            if is_last_in_beat and b_idx in beat_bounds:
+                beat_bounds[b_idx][1] = cursor_samples / float(sr_hz)
 
         full_48k = np.concatenate(master_parts) if len(master_parts) > 1 else np.zeros(sr_hz, dtype=np.float32)
         raw_master = td / "raw_bilingual_48k.wav"
@@ -345,12 +377,18 @@ async def _synth_bilingual_uzbek_english_hd(
         out_wav.parent.mkdir(parents=True, exist_ok=True)
         sf.write(str(out_wav), stereo_out, sr_hz, subtype="PCM_16")
 
-    norm_preview = " ".join(f"[{lg.upper()}: {ch}]" for lg, ch in spans)
+    norm_preview = " ".join(f"[{lg.upper()}: {ch}]" for _, lg, ch, _ in beat_spans)
+    beat_timings = [
+        {"beat": k, "start": round(v[0], 3), "end": round(v[1], 3)}
+        for k, v in sorted(beat_bounds.items())
+    ]
     return {
         "backend": "bilingual_uzbek_english_studio_hd (Sardor 115.9Hz + Christopher 115.5Hz)",
         "normalized_text": norm_preview,
         "sentence_spans": sentence_spans,
         "acoustic_words": acoustic_words,
+        "beat_timings": beat_timings,
+        "exact_word_boundaries": True,
     }
 
 
@@ -746,6 +784,7 @@ async def synthesize_pro_uzbek_voice(
     profile: str = "uzbek_bilingual_hd",
     speed: float = 1.0,
     target_duration: float | None = None,
+    beat_texts: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Unified $0-cost Bilingual (Uzbek + English) & Native Uzbek Male Voice dispatcher!
@@ -763,7 +802,7 @@ async def synthesize_pro_uzbek_voice(
 
     if eff_profile == "uzbek_bilingual_hd":
         try:
-            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed)
+            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed, beat_texts=beat_texts)
         except Exception as e:
             info = await asyncio.to_thread(_synth_silero_uzb_male_isolated, text, out_wav, speed)
             info["backend"] += f" (Bilingual offline zaxira -> {e})"
@@ -771,7 +810,7 @@ async def synthesize_pro_uzbek_voice(
         try:
             info = await asyncio.to_thread(_synth_silero_uzb_male_isolated, text, out_wav, speed)
         except Exception as e:
-            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed)
+            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed, beat_texts=beat_texts)
             info["backend"] += f" (Silero zaxira -> {e})"
     elif eff_profile in ("sardor_tiniq_uz", "sardor_founder"):
         info = await _synth_sardor_studio(text, out_wav, deep_baritone=False, speed=speed)
@@ -780,14 +819,14 @@ async def synthesize_pro_uzbek_voice(
         if m_res is not None:
             info = m_res
         else:
-            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed)
+            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed, beat_texts=beat_texts)
             info["backend"] += " (Ovoz namunasi kutilmoqda -> Bilingual HD ishlatildi)"
     elif eff_profile == "meta_mms_male":
         info = await asyncio.to_thread(_synth_meta_mms_sync, text, out_wav, speed)
     elif eff_profile == "gemini_orus":
         gem = await _synth_gemini_male(text, out_wav, voice_name="Orus")
         if gem is None:
-            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed)
+            info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed, beat_texts=beat_texts)
             info["backend"] += " (GEMINI_API_KEY yo'q -> Bilingual HD ishlatildi)"
         else:
             info = gem
@@ -795,7 +834,7 @@ async def synthesize_pro_uzbek_voice(
         nv = await synthesize_uzbek_navoiy(text, out_wav, emotion="mehribon", speed=speed)
         return {**nv, "profile": eff_profile}
     else:
-        info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed)
+        info = await _synth_bilingual_uzbek_english_hd(text, out_wav, speed=speed, beat_texts=beat_texts)
 
     dur = round(_probe_dur(ffmpeg_bin, out_wav), 2)
     return {
@@ -808,6 +847,8 @@ async def synthesize_pro_uzbek_voice(
         "normalized_text": info["normalized_text"],
         "sentence_spans": info.get("sentence_spans") or [],
         "acoustic_words": info.get("acoustic_words") or [],
+        "beat_timings": info.get("beat_timings") or [],
+        "exact_word_boundaries": bool(info.get("exact_word_boundaries", False)),
         "elapsed_sec": round(time.time() - t0, 2),
     }
 

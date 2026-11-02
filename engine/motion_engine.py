@@ -582,6 +582,8 @@ def build_diyor_motion_html(spec: dict[str, Any]) -> tuple[str, list[float], flo
             img_src = sc.get("imageDataUrl") or ""
             cap_txt = sc.get("captionText", sc.get("subtext", "Mavzuga oid vizual tahlil"))
             src_lbl = sc.get("sourceLabel", "VIZUAL FAKTLAR · HD")
+            fx_pct = round(min(78.0, max(22.0, float(sc.get("focalX", 0.50)) * 100.0)), 1)
+            fy_pct = round(min(76.0, max(20.0, float(sc.get("focalY", 0.44)) * 100.0)), 1)
             img_h = 430 if is_compact else 490
             left_h = f"""
               <div class="eyebrow"><span class="dot"></span>{sc.get("eyebrow", "VIZUAL DALIL · FAKTLAR")}</div>
@@ -590,7 +592,7 @@ def build_diyor_motion_html(spec: dict[str, Any]) -> tuple[str, list[float], flo
             right_h = f"""
               <div class="card m-frame" style="padding:14px; border-radius:28px; background:var(--surface); border:1.5px solid var(--border); box-shadow:0 22px 48px rgba(20,20,19,0.10);">
                 <div style="width:100%; height:{img_h}px; border-radius:20px; overflow:hidden; position:relative; background:#191816;">
-                  <img class="m-img" src="{img_src}" style="width:100%; height:100%; object-fit:cover; display:block; transform-origin:50% 45%;" />
+                  <img class="m-img" src="{img_src}" style="width:100%; height:100%; object-fit:cover; object-position:{fx_pct}% {fy_pct}%; display:block; transform-origin:{fx_pct}% {fy_pct}%;" />
                   <div style="position:absolute; top:14px; left:14px; background:rgba(20,20,19,0.74); color:#faf9f5; font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.14em; padding:6px 12px; border-radius:999px;">📷 {src_lbl}</div>
                 </div>
                 <div style="display:flex; justify-content:space-between; align-items:center; padding:14px 10px 4px 10px; gap:14px;">
@@ -601,9 +603,9 @@ def build_diyor_motion_html(spec: dict[str, Any]) -> tuple[str, list[float], flo
             """
             scene_html_blocks.append(_wrap_scene_layout(aspect, sid, left_h, right_h))
             js_blocks.append(f"""
-              tl.fromTo("#{sid} .s-hd", {{ y: 24, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.34, ease: "power3.out" }}, {t0 + 0.04});
-              tl.fromTo("#{sid} .m-frame", {{ y: 24, opacity: 0, scale: 0.97 }}, {{ y: 0, opacity: 1, scale: 1.0, duration: 0.36, ease: "power3.out" }}, {t0 + 0.14});
-              tl.fromTo("#{sid} .m-img", {{ scale: 1.0, y: 0 }}, {{ scale: 1.085, y: -10, duration: {max(1.2, dur - 0.20):.2f}, ease: "none" }}, {t0 + 0.14});
+              tl.fromTo("#{sid} .s-hd", {{ y: 20, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.24, ease: "power3.out" }}, {t0 + 0.02});
+              tl.fromTo("#{sid} .m-frame", {{ y: 18, opacity: 0, scale: 0.98 }}, {{ y: 0, opacity: 1, scale: 1.0, duration: 0.24, ease: "power3.out" }}, {t0 + 0.02});
+              tl.fromTo("#{sid} .m-img", {{ scale: 1.0 }}, {{ scale: 1.115, duration: {max(1.2, dur - 0.08):.2f}, ease: "sine.inOut" }}, {t0 + 0.02});
             """)
 
         elif stype == "broll_card":

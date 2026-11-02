@@ -434,18 +434,19 @@ async def generate_dynamic_ai_blueprint(
         "   - `code_architecture`: `{\"type\":\"code_architecture\",\"eyebrow\":\"TEXNIK YECHIM\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"fileName\":\"agent.py\",\"badge\":\"AI\",\"codeLines\":[\"...\", ...4-5 qator]}`\n"
         "   - `cta_terminal` (faqat 1-yo'nalish O'rganish videolari oxirida): `{\"type\":\"cta_terminal\",\"eyebrow\":\"BEPUL QO'LLANMA · DIRECT\",\"headlineHtml\":\"Izohda <em>«KALIT»</em><br>deb yozing\",\"subtext\":\"...\",\"keyword\":\"KALIT\"}`\n"
         "   - `follow_outro` (faqat 2-yo'nalish Yangilik videolari oxirida — Gate'siz!): `{\"type\":\"follow_outro\",\"eyebrow\":\"KUNLIK YANGILIKLAR · @DIYOR.CTR\",\"headlineHtml\":\"Shunday videolarni<br><em>o‘tkazib yubormang</em>\",\"subtext\":\"Obuna bo‘lib qo‘ysangiz, har kuni shunday eng muhim yangilik va tahlillarni joylab boramiz!\"}`\n"
-        "7. INGLIZCHA BREND VA ATAMALAR QOIDASI: `display_words_text` ichida mashhur brend va texnologik nomlarni (Apple, iPhone, Bloomberg, The Verge, OpenAI, ChatGPT, Claude, Tesla Optimus, Boston Dynamics) asl inglizcha imlosida yozing va ularga (-ning, -da, -ni, -ga) qo'shimchasini bevosita yopishtirmang (masalan: `Apple'ning` o'rniga `Apple kompaniyasining`, `iPhone'da` o'rniga `iPhone modelida`, `Claude'ni` o'rniga `Claude tizimini` deb yozing) — shunda ikki tilli studiya diktori har bir inglizcha so'zni 100% sof talaffuz qiladi!\n"
-        "8. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
+        "7. INGLIZCHA BREND VA ATAMALAR QOIDASI: `display_words_text` va `spokenText` ichida mashhur brend va texnologik nomlarni (Apple, iPhone, Bloomberg, The Verge, OpenAI, ChatGPT, Claude, Tesla Optimus, Boston Dynamics) asl inglizcha imlosida yozing va ularga (-ning, -da, -ni, -ga) qo'shimchasini bevosita yopishtirmang (masalan: `Apple'ning` o'rniga `Apple kompaniyasining`, `iPhone'da` o'rniga `iPhone modelida`, `Claude'ni` o'rniga `Claude tizimini` deb yozing)!\n"
+        "8. O'TA QAT'IY HIKOYA VA SAHNA MOSLIGI QOIDASI (CHALA GAP TAQIQLANADI!): HECH QACHON gap oxirida yoki o'rtasida 'Keling batafsil bilib olamiz', 'Hozir aytib beraman', 'Videoni oxirigacha ko'ring' kabi javobsiz va'da gaplarni YOZMA! Video to'liq mantiqiy yakunga ega bo'lsin: `hookSpoken` (kuchli 1 gaplik kirish fakti) -> har bir `scenes[i]` ichida AYNAN SHU SAHNADAGI rasm/kartaga 100% mos 1 gaplik to'liq fakt (`spokenText`) -> oxirgi sahnada yakuniy xulosa va obuna/kalit so'z chaqirig'i!\n"
+        "9. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
     )
 
     usr_p = (
         f"MAVZU: {clean_topic}\n"
         f"TANLANGAN YO'NALISH: {'2-YO`NALISH: YANGILIK VA MAKSIMAL PROSMOTR (B-Roll Hook + Rasm/Videolarga boy + Gate YO`Q, oxirida Follow chaqirig`i!)' if mode == 'news' else '1-YO`NALISH: O`RGANISH VA AMALIY QO`LLANMA (Portret Hook + Qadamma-qadam dars + Follow-Gate kalit so`z!)'}\n"
         f"SAHNALAR REJASI: {scene_plan}\n"
-        f"DIKTOR MATNI HAJMI (`display_words_text`): {target_words}\n"
+        f"DIKTOR MATNI HAJMI: {target_words}\n"
         + (f"FOYDALANUVCHI KALIT SO'ZI: {raw_kw if (raw_kw and raw_kw != 'SKILL') else 'Mavzuga mos qisqa kalit so`z tanla'}\n" if mode == "edu" else "")
         + (f"\nINTERNETDAN TOPILGAN REAL FAKTLAR:\n{facts}\n" if facts else "")
-        + "\nQuyidagi JSON strukturasini to'liq to'ldirib qaytar:\n"
+        + "\nQuyidagi JSON strukturasini to'liq to'ldirib qaytar (har bir `scenes` obyektida AYNAN o'sha sahna sarlavhasi va rasmiga mos 1 gaplik `spokenText` bo'lishi SHART!):\n"
         '{\n'
         '  "theme": "lotion yoki warm",\n'
         '  "keyword": "KALIT_SOZ_YOKI_YANGILIK_TEGI",\n'
@@ -453,11 +454,15 @@ async def generate_dynamic_ai_blueprint(
         '  "kicker": "TEZKOR YANGILIK · 2026 yoki AMALIY DARS",\n'
         '  "hookHeadlineHtml": "Sensatsion yoki kuchli sarlavha <br> va <em>urg\'u</em>",\n'
         '  "hookSubtext": "1 gaplik aniq qiziqtiruvchi izoh",\n'
+        '  "hookSpoken": "0-soniyada Hook kadr ustida aytiladigan 1 gaplik aniq kirish fakti",\n'
         '  "hookBrollQuery": "2-3 concrete English visual words for opening B-roll video (e.g. \'humanoid robot\', \'data center\', \'electric car\')",\n'
         '  "hookImageQuery": "specific English search query for cover/hook photo (3-5 words)",\n'
         '  "callouts": [{"label": "FAKT", "value": "..."}, {"label": "MANBA", "value": "..."}],\n'
-        '  "display_words_text": "Diktor o\'qiydigan to\'liq, ravon, qiziqarli O\'zbekcha matn",\n'
-        '  "scenes": [ ... sahnalar ro\'yxati ... ],\n'
+        '  "display_words_text": "hookSpoken va barcha scenes[].spokenText birlashmasidan iborat to\'liq tugallangan matn",\n'
+        '  "scenes": [\n'
+        '    {"type": "media_card", "spokenText": "Aynan shu 1-sahna rasmi va sarlavhasiga mos to\'liq fakt gap.", ...},\n'
+        '    ...\n'
+        '  ],\n'
         '  "caption": "Instagram post uchun to\'liq foydali matn"\n'
         '}'
     )
@@ -522,6 +527,11 @@ async def generate_dynamic_ai_blueprint(
                 })
 
         fb_iq, fb_vq = _infer_english_visual_queries(clean_topic)
+        scenes_list = _ensure_visual_scene_slots(scenes_list, clean_topic, mode)
+        hook_spoken_raw = str(parsed.get("hookSpoken") or "")
+        beat_texts, clean_disp_joined = _synchronize_beats_and_scenes(
+            hook_spoken_raw, disp_txt, scenes_list, mode, kw
+        )
         return {
             "video_mode": mode,
             "topic": clean_topic,
@@ -530,8 +540,9 @@ async def generate_dynamic_ai_blueprint(
             "is_long": is_long,
             "target_duration": dur_f,
             "behindWord": behind,
-            "voice_script": vo_script,
-            "display_words_text": disp_txt,
+            "beat_texts": beat_texts,
+            "voice_script": clean_disp_joined,
+            "display_words_text": clean_disp_joined,
             "hookBrollQuery": str(parsed.get("hookBrollQuery") or fb_vq).strip(),
             "hookImageQuery": str(parsed.get("hookImageQuery") or fb_iq).strip(),
             "hook_config": {
@@ -656,6 +667,9 @@ def build_autopilot_blueprint(
         caption = f"🚀 {clean_topic}\n\nObuna bo‘ling (@diyor.ctr) va izohda «{kw}» deb yozing — bepul qo‘llanma Direct’ingizga boradi!"
         c1, c2 = {"label": "DARS", "value": behind}, {"label": "DIRECT", "value": f"«{kw}»"}
 
+    scenes = _ensure_visual_scene_slots(scenes, clean_topic, mode)
+    beat_texts, clean_disp_joined = _synchronize_beats_and_scenes("", display_words_text, scenes, mode, kw)
+
     return {
         "video_mode": mode,
         "topic": clean_topic,
@@ -664,8 +678,9 @@ def build_autopilot_blueprint(
         "is_long": is_long,
         "target_duration": float(target_duration or 14.0),
         "behindWord": behind,
-        "voice_script": voice_script,
-        "display_words_text": display_words_text,
+        "beat_texts": beat_texts,
+        "voice_script": clean_disp_joined,
+        "display_words_text": clean_disp_joined,
         "hookBrollQuery": fb_vq,
         "hookImageQuery": fb_iq,
         "hook_config": {
@@ -680,6 +695,98 @@ def build_autopilot_blueprint(
         "scenes": scenes,
         "caption": caption,
     }
+
+
+_DANGLING_CLIFFHANGER_RE = re.compile(
+    r"(?:keling[,\s]+)?(?:buni\s+|bu\s+haqda\s+|endi\s+|hozir\s+)?(?:batafsil\s+|birgalikda\s+|yaqindan\s+)?"
+    r"(?:bilib\s+olamiz|ko['ʻʼ]?rib\s+chiqamiz|aytib\s+beraman|gaplashamiz|tushuntiraman|ko['ʻʼ]?ramiz)[!.\s]*|"
+    r"(?:videoni\s+oxirigacha\s+ko['ʻʼ]?ring|shu\s+videoda\s+aytib\s+beraman)[!.\s]*",
+    re.IGNORECASE,
+)
+
+
+def _strip_dangling_cliffhangers(text: str) -> str:
+    """Removes empty teaser cliffhangers ('keling batafsil bilib olamiz', 'hozir aytib beraman') so every Reel finishes its story completely!"""
+    if not text:
+        return ""
+    cleaned = _DANGLING_CLIFFHANGER_RE.sub(" ", text)
+    cleaned = re.sub(r"\s+([,.!?:;])", r"\1", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
+
+
+def _split_sentences_clean(text: str) -> list[str]:
+    pts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p.strip()]
+    return pts
+
+
+def _synchronize_beats_and_scenes(
+    hook_spoken: str,
+    full_disp_text: str,
+    scenes_list: list[dict[str, Any]],
+    mode: str,
+    kw: str,
+) -> tuple[list[str], str]:
+    """
+    Guarantees 1-to-1 narrative & timing lock:
+      - Returns `(beat_texts, joined_display_text)` where `len(beat_texts) == 1 + len(scenes_list)`:
+        * `beat_texts[0]` -> spoken during Opening Hook (`0.0s .. hook_dur`)
+        * `beat_texts[i + 1]` -> spoken during `scenes_list[i]`!
+      - Strips any unfinished 'aytib beraman / bilib olamiz' cliffhangers so every thought concludes cleanly!
+    """
+    outro_default = (
+        "Obuna bo'lib qo'ysangiz, har kuni shunday eng muhim yangilik va tahlillarni joylab boramiz!"
+        if mode == "news"
+        else f"To'liq bepul qo'llanmani olish uchun obuna bo'ling va izohda {kw} deb yozing!"
+    )
+
+    h_clean = _strip_dangling_cliffhangers(hook_spoken)
+    scene_spokens = [_strip_dangling_cliffhangers(str(s.get("spokenText") or "")) for s in scenes_list]
+
+    # If the LLM supplied explicit `hookSpoken` + `spokenText` for every scene, validate & finalize!
+    if h_clean and all(bool(x) for x in scene_spokens):
+        last_low = scene_spokens[-1].lower()
+        if mode == "news" and not any(w in last_low for w in ("obuna", "follov", "joylab")):
+            scene_spokens[-1] = (scene_spokens[-1].rstrip(".!? ") + ". " + outro_default).strip()
+        elif mode == "edu" and kw.lower() not in last_low and "izoh" not in last_low:
+            scene_spokens[-1] = (scene_spokens[-1].rstrip(".!? ") + ". " + outro_default).strip()
+        beats = [h_clean, *scene_spokens]
+        for idx_s, s_txt in enumerate(scene_spokens):
+            scenes_list[idx_s]["spokenText"] = s_txt
+        return beats, " ".join(beats)
+
+    # Otherwise partition `full_disp_text` sentences monotonically across `[Hook, Scene_0, ..., Scene_{N-1}]`
+    cleaned_full = _strip_dangling_cliffhangers(full_disp_text)
+    sents = _split_sentences_clean(cleaned_full)
+    # Separate closing CTA sentence if already at end
+    if sents and any(w in sents[-1].lower() for w in ("obuna", "follov", "izohda", "joylab boramiz")):
+        outro_sent = sents.pop()
+    else:
+        outro_sent = outro_default
+
+    body_slots = max(1, len(scenes_list))  # Hook + (len(scenes_list) - 1) content scenes; last scene gets `outro_sent`
+    if len(sents) < body_slots:
+        # Derive missing factual sentences directly from scene headlines/captions so every card matches speech!
+        while len(sents) < body_slots:
+            sc_ref = scenes_list[min(len(sents) - 1 if len(sents) > 0 else 0, len(scenes_list) - 1)]
+            hd_plain = re.sub(r"<[^>]+>", " ", str(sc_ref.get("headlineHtml") or "")).strip()
+            cap_plain = str(sc_ref.get("captionText") or sc_ref.get("subtext") or "").strip()
+            synth_s = f"{hd_plain}: {cap_plain}." if (hd_plain and cap_plain) else (f"{hd_plain}." if hd_plain else "Jarayon yangi bosqichga chiqmoqda.")
+            sents.append(re.sub(r"\s+", " ", synth_s))
+
+    # Group `sents` into `body_slots` buckets (`slot 0` = Hook, `slots 1..N-1` = content scenes)
+    buckets: list[str] = []
+    n_s = len(sents)
+    for b_i in range(body_slots):
+        i0 = int(round(b_i * n_s / float(body_slots)))
+        i1 = int(round((b_i + 1) * n_s / float(body_slots)))
+        chunk_s = " ".join(sents[i0:max(i0 + 1, i1)]).strip()
+        buckets.append(chunk_s)
+
+    beats_out = [*buckets, outro_sent]
+    for idx_s in range(len(scenes_list)):
+        scenes_list[idx_s]["spokenText"] = beats_out[idx_s + 1]
+    return beats_out, " ".join(beats_out)
 
 
 def align_clean_uzbek_words(display_text: str, whisper_words: list[dict[str, Any]], total_dur: float) -> list[dict[str, Any]]:
@@ -963,21 +1070,17 @@ def _extract_first_frame_data_url(mp4_path: str) -> str:
     return ""
 
 
-async def hydrate_topic_media_scenes(
+def _ensure_visual_scene_slots(
     scenes_list: list[dict[str, Any]],
     topic: str,
-    avoid_urls: set[str] | None = None,
     video_mode: str = "news",
 ) -> list[dict[str, Any]]:
     """
-    Packs high-density, 100% topic-specific HD photos & B-roll videos across the Reel (`used_urls`-deduplicated!).
-    In `news` mode ensures at least 3 visual cards (`media_card` / `broll_card`); in `edu` mode at least 2!
-    Alternates `broll_card` slots between real moving camera B-roll and 3-Shot Cinema Press Documentary Montage
-    so viewers see BOTH live motion AND exact real-world photos of the brand/person/device!
+    Ensures visual density (`>= 3` photo/video scenes in `news`, `>= 2` in `edu`) BEFORE
+    audio beat synchronization so `1 + len(scenes)` stays 100% locked to `len(beat_texts)`!
     """
     if not scenes_list:
         return scenes_list
-    used_urls = avoid_urls if avoid_urls is not None else set()
     fb_img_q, fb_vid_q = _infer_english_visual_queries(topic)
     out_scenes = [dict(s) for s in scenes_list]
     short_head = re.sub(r"\s+", " ", topic).strip()[:36]
@@ -986,7 +1089,6 @@ async def hydrate_topic_media_scenes(
     min_visuals = 3 if video_mode == "news" else 2
 
     if visual_count < min_visuals and len(out_scenes) >= 1:
-        # Inject exact topic visual scenes before the final CTA/Outro so every Reel is visually rich!
         insert_pos = max(0, len(out_scenes) - 1)
         if visual_count == 0:
             out_scenes.insert(
@@ -1015,8 +1117,25 @@ async def hydrate_topic_media_scenes(
             )
             visual_count += 1
             insert_pos = min(len(out_scenes) - 1, insert_pos + 1)
+    return out_scenes
 
-    # Hydrate sequentially with shared `used_urls` so every photo & video clip in the Reel is 100% unique!
+
+async def hydrate_topic_media_scenes(
+    scenes_list: list[dict[str, Any]],
+    topic: str,
+    avoid_urls: set[str] | None = None,
+    video_mode: str = "news",
+) -> list[dict[str, Any]]:
+    """
+    Hydrates every `media_card` (with Computer-Vision `focalX`/`focalY` subject-zoom lock!) and
+    `broll_card` without altering scene count so beat-locked scene cuts stay 100% synchronized!
+    """
+    if not scenes_list:
+        return scenes_list
+    used_urls = avoid_urls if avoid_urls is not None else set()
+    fb_img_q, fb_vid_q = _infer_english_visual_queries(topic)
+    out_scenes = [dict(s) for s in scenes_list]
+
     hydrated: list[dict[str, Any]] = []
     broll_slot_idx = 0
     img_slot_idx = 0
@@ -1031,10 +1150,11 @@ async def hydrate_topic_media_scenes(
             res = await fetch_topic_editorial_image(iq, avoid_urls=used_urls)
             if res and res.get("data_url"):
                 sc["imageDataUrl"] = res["data_url"]
+                sc["focalX"] = float(res.get("focal_x", 0.50))
+                sc["focalY"] = float(res.get("focal_y", 0.44))
                 sc["sourceLabel"] = str(res.get("source") or "VIZUAL FAKTLAR · HD").upper()
         elif st == "broll_card" and not sc.get("videoPath"):
             vq = str(sc.get("brollQuery") or fb_vid_q).strip()
-            # Alternate: 1st broll_card -> real camera motion clip; 2nd broll_card -> 3-Shot Exact Press Cinema Montage!
             prefer_montage = (broll_slot_idx % 2 == 1)
             broll_slot_idx += 1
             vres = await fetch_topic_broll_video(vq, avoid_urls=used_urls, prefer_press_montage=prefer_montage)
@@ -1048,6 +1168,8 @@ async def hydrate_topic_media_scenes(
                 if ires and ires.get("data_url"):
                     sc["type"] = "media_card"
                     sc["imageDataUrl"] = ires["data_url"]
+                    sc["focalX"] = float(ires.get("focal_x", 0.50))
+                    sc["focalY"] = float(ires.get("focal_y", 0.44))
                     sc["sourceLabel"] = str(ires.get("source") or "VIZUAL FAKTLAR · HD").upper()
         hydrated.append(sc)
     return hydrated
@@ -1102,14 +1224,18 @@ async def run_one_click_autopilot(
         out_dir = Path("/home/user/.cache/diyor_vault/media/custom_renders") / f"autopilot_{mode}_{kw.lower()}_{ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Synthesize Bilingual Uzbek + English Male Studio Voiceover (`uzbek_bilingual_hd` default!)
-    await _emit("🎙 <b>3-qadam:</b> O‘zbek + Ingliz Bilingual HD (100% tiniq talaffuz) erkak ovozi sintez qilinmoqda...")
+    # 1. Synthesize Beat-Locked Bilingual Uzbek + English Male Studio Voiceover (`uzbek_bilingual_hd` default!)
+    await _emit("🎙 <b>3-qadam:</b> Sahnalarga 100% sinxron O‘zbek + Ingliz Bilingual HD erkak ovozi sintez qilinmoqda...")
     vo_wav = out_dir / f"00_voice_{voice_profile}.wav"
-    tts_meta = await synthesize_pro_uzbek_voice(bp["voice_script"], vo_wav, profile=voice_profile, speed=1.0)
+    beat_texts = bp.get("beat_texts") or []
+    tts_meta = await synthesize_pro_uzbek_voice(
+        bp["voice_script"], vo_wav, profile=voice_profile, speed=1.0, beat_texts=beat_texts
+    )
     min_floor = max(float(target_duration or 14.0), 40.0) if is_long else max(float(target_duration or 13.0), 10.5)
-    vo_dur = max(min_floor, float(tts_meta["duration"]) + 0.85)
+    vo_dur = max(min_floor, round(float(tts_meta["duration"]) + 0.55, 2))
+    beat_timings = tts_meta.get("beat_timings") or []
 
-    # 2. Fetch Whisper timestamps + Hook/Cover + Rich Deduplicated Topic Media!
+    # 2. Compute exact beat-locked `hook_dur` + scene durations so EVERY visual card cuts at the exact spoken sentence!
     ffmpeg_bin = get_ffmpeg_bin()
     vo_16k = out_dir / "tmp_vo_16k.wav"
     subprocess.run(
@@ -1118,7 +1244,11 @@ async def run_one_click_autopilot(
     )
 
     cover_4x5_png = out_dir / f"01_KARUSEL_muqova_{kw.lower()}_4x5.png"
-    hook_dur = 3.2 if is_long else 2.8
+    ai_scenes_raw = bp.get("scenes") or []
+    if beat_timings and len(beat_timings) == 1 + len(ai_scenes_raw):
+        hook_dur = max(2.2, round(float(beat_timings[0]["end"]), 2))
+    else:
+        hook_dur = 3.2 if is_long else 2.8
     rem_dur = max(36.8 if is_long else 7.5, round(vo_dur - hook_dur, 2))
     used_media_urls: set[str] = set()
 
@@ -1171,27 +1301,42 @@ async def run_one_click_autopilot(
 
     ai_scenes = bp.get("scenes")
     if isinstance(ai_scenes, list) and len(ai_scenes) >= 2:
-        weights: list[float] = []
-        for sc in ai_scenes:
-            st_t = sc.get("type", "hook_stat")
-            if st_t in ("news_radar", "pipeline_dm", "scorecard_bars", "vs_comparison", "broll_card", "media_card"):
-                weights.append(1.22)
-            elif st_t in ("cta_terminal", "follow_outro"):
-                weights.append(0.88)
-            else:
-                weights.append(1.0)
-        w_sum = sum(weights) or 1.0
-        scenes_payload = []
-        used = 0.0
-        for idx_s, sc in enumerate(ai_scenes):
-            sc_copy = dict(sc)
-            if idx_s == len(ai_scenes) - 1:
-                sc_copy["duration"] = max(2.5, round(rem_dur - used, 2))
-            else:
-                d_s = max(2.6, round(rem_dur * (weights[idx_s] / w_sum), 2))
+        if beat_timings and len(beat_timings) == 1 + len(ai_scenes):
+            # Sample-exact Beat-Locked Scene Durations: every card stays on screen for the exact sentence spoken about it!
+            scenes_payload = []
+            prev_cut = hook_dur
+            for idx_s, sc in enumerate(ai_scenes):
+                sc_copy = dict(sc)
+                if idx_s == len(ai_scenes) - 1:
+                    d_s = max(2.2, round(vo_dur - prev_cut, 2))
+                else:
+                    target_cut = max(prev_cut + 2.0, round(float(beat_timings[idx_s + 1]["end"]), 2))
+                    d_s = round(target_cut - prev_cut, 2)
+                    prev_cut = round(prev_cut + d_s, 2)
                 sc_copy["duration"] = d_s
-                used += d_s
-            scenes_payload.append(sc_copy)
+                scenes_payload.append(sc_copy)
+        else:
+            weights: list[float] = []
+            for sc in ai_scenes:
+                st_t = sc.get("type", "hook_stat")
+                if st_t in ("news_radar", "pipeline_dm", "scorecard_bars", "vs_comparison", "broll_card", "media_card"):
+                    weights.append(1.22)
+                elif st_t in ("cta_terminal", "follow_outro"):
+                    weights.append(0.88)
+                else:
+                    weights.append(1.0)
+            w_sum = sum(weights) or 1.0
+            scenes_payload = []
+            used = 0.0
+            for idx_s, sc in enumerate(ai_scenes):
+                sc_copy = dict(sc)
+                if idx_s == len(ai_scenes) - 1:
+                    sc_copy["duration"] = max(2.5, round(rem_dur - used, 2))
+                else:
+                    d_s = max(2.6, round(rem_dur * (weights[idx_s] / w_sum), 2))
+                    sc_copy["duration"] = d_s
+                    used += d_s
+                scenes_payload.append(sc_copy)
     else:
         scenes_payload = bp.get("scenes") or []
 
@@ -1222,10 +1367,21 @@ async def run_one_click_autopilot(
     )
     raw_mp4.unlink(missing_ok=True)
 
-    # 5. Burn Kinetic Pop Subtitles into lower safe zone (`y=1642`) using Whisper OR Silero sentence-exact acoustic words!
+    # 5. Burn 100% Harfma-Harf Millisecond-Exact Kinetic Pop Subtitles into lower safe zone (`y=1642`)!
     final_reel_mp4 = out_dir / f"02_REELS_{mode}_{kw.lower()}_diyor_ctr_9x16.mp4"
     whisper_words = (w_res or {}).get("words") or tts_meta.get("acoustic_words") or []
-    aligned_words = align_clean_uzbek_words(bp["display_words_text"], whisper_words, float(tts_meta["duration"]))
+    if tts_meta.get("exact_word_boundaries") and tts_meta.get("acoustic_words"):
+        aligned_words = [
+            {
+                "word": str(w["word"]).strip(),
+                "start": round(float(w["start"]), 3),
+                "end": round(float(w["end"]), 3),
+            }
+            for w in tts_meta["acoustic_words"]
+            if str(w.get("word") or "").strip()
+        ]
+    else:
+        aligned_words = align_clean_uzbek_words(bp["display_words_text"], whisper_words, float(tts_meta["duration"]))
 
     if with_subtitles:
         await asyncio.to_thread(render_karaoke_overlay_onto_mp4, voiced_mp4, final_reel_mp4, aligned_words, 30, 1642)
@@ -1235,6 +1391,17 @@ async def run_one_click_autopilot(
 
     caption_file = out_dir / "INSTAGRAM_CAPTION.txt"
     caption_file.write_text(bp["caption"], encoding="utf-8")
+
+    critic_audit = {
+        "no_dangling_cliffhanger": not bool(
+            re.search(r"\b(aytib beraman|batafsil bilib olamiz|keling ko['‘]?ramiz)\b", bp["voice_script"], flags=re.IGNORECASE)
+        ),
+        "beat_scene_sync_count": len(beat_timings),
+        "exact_harfma_harf_subtitles": bool(tts_meta.get("exact_word_boundaries")) and len(aligned_words) >= 6,
+        "smart_focal_zoom_scenes": sum(
+            1 for s in bp["reel_config"].get("scenes", []) if ("focalX" in s or s.get("type") in ("media_card", "broll_card"))
+        ),
+    }
 
     return {
         "ok": True,
@@ -1246,9 +1413,11 @@ async def run_one_click_autopilot(
         "cover_png": str(cover_4x5_png),
         "voice_wav": str(vo_wav),
         "caption": bp["caption"],
+        "voice_script": bp["voice_script"],
         "tts": tts_meta,
         "whisper_words_count": len(whisper_words),
         "aligned_words": aligned_words,
+        "critic_audit": critic_audit,
         "duration": reel_meta["duration"],
         "elapsed_sec": round(time.time() - t0, 2),
     }
