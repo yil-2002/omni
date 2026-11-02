@@ -578,6 +578,64 @@ def build_diyor_motion_html(spec: dict[str, Any]) -> tuple[str, list[float], flo
               tl.fromTo("#{sid} .vs-new", {{ x: 26, opacity: 0, scale: 0.97 }}, {{ x: 0, opacity: 1, scale: 1.0, duration: 0.42, ease: "power3.out" }}, {t0 + 0.52});
             """)
 
+        elif stype == "media_card":
+            img_src = sc.get("imageDataUrl") or ""
+            cap_txt = sc.get("captionText", sc.get("subtext", "Mavzuga oid vizual tahlil"))
+            src_lbl = sc.get("sourceLabel", "VIZUAL FAKTLAR · HD")
+            img_h = 430 if is_compact else 490
+            left_h = f"""
+              <div class="eyebrow"><span class="dot"></span>{sc.get("eyebrow", "VIZUAL DALIL · FAKTLAR")}</div>
+              <h2 class="h-serif s-hd" style="font-size:{62 if is_wide else (48 if is_compact else 58)}px; margin-bottom:{0 if is_wide else 22}px;">{sc.get("headlineHtml", "Jarayon <em>amalda</em><br>qanday ko‘rinadi?")}</h2>
+            """
+            right_h = f"""
+              <div class="card m-frame" style="padding:14px; border-radius:28px; background:var(--surface); border:1.5px solid var(--border); box-shadow:0 22px 48px rgba(20,20,19,0.10);">
+                <div style="width:100%; height:{img_h}px; border-radius:20px; overflow:hidden; position:relative; background:#191816;">
+                  <img class="m-img" src="{img_src}" style="width:100%; height:100%; object-fit:cover; display:block; transform-origin:50% 45%;" />
+                  <div style="position:absolute; top:14px; left:14px; background:rgba(20,20,19,0.74); color:#faf9f5; font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.14em; padding:6px 12px; border-radius:999px;">📷 {src_lbl}</div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:14px 10px 4px 10px; gap:14px;">
+                  <div style="font-size:19px; font-weight:600; color:var(--ink2); line-height:1.3;">{cap_txt}</div>
+                  <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--accent-deep); background:var(--accent-soft); padding:5px 11px; border-radius:999px; white-space:nowrap;">@DIYOR.CTR</div>
+                </div>
+              </div>
+            """
+            scene_html_blocks.append(_wrap_scene_layout(aspect, sid, left_h, right_h))
+            js_blocks.append(f"""
+              tl.fromTo("#{sid} .s-hd", {{ y: 24, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.34, ease: "power3.out" }}, {t0 + 0.04});
+              tl.fromTo("#{sid} .m-frame", {{ y: 24, opacity: 0, scale: 0.97 }}, {{ y: 0, opacity: 1, scale: 1.0, duration: 0.36, ease: "power3.out" }}, {t0 + 0.14});
+              tl.fromTo("#{sid} .m-img", {{ scale: 1.0, y: 0 }}, {{ scale: 1.085, y: -10, duration: {max(1.2, dur - 0.20):.2f}, ease: "none" }}, {t0 + 0.14});
+            """)
+
+        elif stype == "broll_card":
+            v_path = sc.get("videoPath") or ""
+            poster_src = sc.get("posterDataUrl") or ""
+            cap_txt = sc.get("captionText", sc.get("subtext", "Mavzuga oid jonli lavha"))
+            src_lbl = sc.get("sourceLabel", "JONLI B-ROLL · HD")
+            vid_h = 430 if is_compact else 490
+            slot_t0 = round(t0 + 0.24, 3)
+            slot_t1 = round(t0 + dur - 0.06, 3)
+            poster_tag = f'<img src="{poster_src}" style="width:100%; height:100%; object-fit:cover; display:block; opacity:0.85;" />' if poster_src else ""
+            left_h = f"""
+              <div class="eyebrow"><span class="dot"></span>{sc.get("eyebrow", "JONLI LAVHA · B-ROLL")}</div>
+              <h2 class="h-serif s-hd" style="font-size:{62 if is_wide else (48 if is_compact else 58)}px; margin-bottom:{0 if is_wide else 22}px;">{sc.get("headlineHtml", "Real jarayon<br><em>jonli kadrda</em>")}</h2>
+            """
+            right_h = f"""
+              <div class="card b-frame" style="padding:14px; border-radius:28px; background:var(--surface); border:1.5px solid var(--border); box-shadow:0 22px 48px rgba(20,20,19,0.10);">
+                <div class="broll-slot" data-t0="{slot_t0}" data-t1="{slot_t1}" data-vpath="{v_path}" data-radius="20" style="width:100%; height:{vid_h}px; border-radius:20px; overflow:hidden; position:relative; background:#191816;">
+                  {poster_tag}
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:18px 10px 6px 10px; gap:14px;">
+                  <div style="font-size:19px; font-weight:600; color:var(--ink2); line-height:1.3;">{cap_txt}</div>
+                  <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#faf9f5; background:var(--accent); padding:5px 12px; border-radius:999px; white-space:nowrap;">● {src_lbl}</div>
+                </div>
+              </div>
+            """
+            scene_html_blocks.append(_wrap_scene_layout(aspect, sid, left_h, right_h))
+            js_blocks.append(f"""
+              tl.fromTo("#{sid} .s-hd", {{ y: 20, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.22, ease: "power3.out" }}, {t0 + 0.02});
+              tl.fromTo("#{sid} .b-frame", {{ y: 18, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.22, ease: "power3.out" }}, {t0 + 0.02});
+            """)
+
         else:  # cta_terminal
             kw = sc.get("keyword", "SKILL")
             term_w = "100%" if is_wide else ("84%" if is_compact else "74%")
@@ -819,12 +877,56 @@ async def render_html_timeline_to_mp4(
             const h = root && root.dataset.height ? parseInt(root.dataset.height, 10) : 1350;
             return { dur, w, h };
         }""")
+        W, H, html_dur = int(meta["w"]), int(meta["h"]), float(meta["dur"])
+        await probe_pg.set_viewport_size({"width": W, "height": H})
+        raw_broll_slots = await probe_pg.evaluate("""() => {
+            const slots = Array.from(document.querySelectorAll('.broll-slot'));
+            if (!slots.length) return [];
+            const out = [];
+            for (const el of slots) {
+                const vpath = el.dataset.vpath || '';
+                const t0 = parseFloat(el.dataset.t0 || '0');
+                const t1 = parseFloat(el.dataset.t1 || '0');
+                const radius = parseInt(el.dataset.radius || '20', 10);
+                if (!vpath || !(t1 > t0)) continue;
+                const midT = (t0 + t1) * 0.5;
+                if (typeof window.__seekTo === 'function') window.__seekTo(midT);
+                const r = el.getBoundingClientRect();
+                if (r.width > 20 && r.height > 20) {
+                    out.push({
+                        video_path: vpath,
+                        x: Math.round(r.left),
+                        y: Math.round(r.top),
+                        w: Math.max(2, Math.floor(r.width / 2) * 2),
+                        h: Math.max(2, Math.floor(r.height / 2) * 2),
+                        radius: radius,
+                        t0: t0,
+                        t1: t1,
+                    });
+                }
+            }
+            if (typeof window.__seekTo === 'function') window.__seekTo(0);
+            return out;
+        }""")
         await probe_browser.close()
 
-        W, H, html_dur = int(meta["w"]), int(meta["h"]), float(meta["dur"])
         prep_frames = prepend_rgb_frames or []
         prep_dur = len(prep_frames) / float(fps)
         total_dur = round(prep_dur + html_dur, 3)
+        broll_windows = [
+            {
+                "video_path": s["video_path"],
+                "x": int(s["x"]),
+                "y": int(s["y"]),
+                "w": int(s["w"]),
+                "h": int(s["h"]),
+                "radius": int(s["radius"]),
+                "t_start": round(float(s["t0"]) + prep_dur, 3),
+                "t_end": round(float(s["t1"]) + prep_dur, 3),
+            }
+            for s in (raw_broll_slots or [])
+            if s.get("video_path") and Path(s["video_path"]).exists()
+        ]
 
         sprite_fps = 10
         clip_dur = 2.4
@@ -891,15 +993,34 @@ async def render_html_timeline_to_mp4(
             concat_txt = tdir / "chunks.txt"
             concat_txt.write_text("\n".join(f"file '{cf.resolve()}'" for cf in chunk_files) + "\n", encoding="utf-8")
 
-            mux_cmd = [
-                ffmpeg_bin, "-y",
-                "-f", "concat", "-safe", "0", "-i", str(concat_txt),
-                "-i", wav_path,
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-                "-movflags", "+faststart", "-shortest",
-                str(out_mp4),
-            ]
+            if broll_windows:
+                from topic_media_engine import composite_broll_windows_onto_mp4
+                concat_raw = tdir / "concat_raw.mp4"
+                subprocess.run(
+                    [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_txt), "-c", "copy", str(concat_raw)],
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                )
+                concat_broll = tdir / "concat_broll.mp4"
+                composite_broll_windows_onto_mp4(ffmpeg_bin, concat_raw, concat_broll, broll_windows, fps=fps)
+                mux_cmd = [
+                    ffmpeg_bin, "-y",
+                    "-i", str(concat_broll),
+                    "-i", wav_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                    "-movflags", "+faststart", "-shortest",
+                    str(out_mp4),
+                ]
+            else:
+                mux_cmd = [
+                    ffmpeg_bin, "-y",
+                    "-f", "concat", "-safe", "0", "-i", str(concat_txt),
+                    "-i", wav_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                    "-movflags", "+faststart", "-shortest",
+                    str(out_mp4),
+                ]
             subprocess.run(mux_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     return {
