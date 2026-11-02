@@ -33,6 +33,7 @@ if "/home/user/tashqi_xotira" not in sys.path:
 from cloud_render_bridge import transcribe_uzbek_via_modal  # noqa: E402
 from motion_engine import VAULT_TMP, get_ffmpeg_bin, render_diyor_motion_mp4  # noqa: E402
 from photo_brand_engine import render_brand_photo_parallax_frames, render_brand_photo_slide  # noqa: E402
+from topic_media_engine import fetch_topic_broll_video, fetch_topic_editorial_image  # noqa: E402
 from uzbek_male_voice_engine import mux_navoiy_voice_onto_mp4, synthesize_pro_uzbek_voice  # noqa: E402
 from uztts_normalize import normalize_uzbek_for_tts  # noqa: E402
 
@@ -185,25 +186,28 @@ async def generate_dynamic_ai_blueprint(topic: str, keyword: str = "SKILL", targ
     is_long = dur_f >= 25.0
 
     facts = await _fetch_live_topic_facts(clean_topic)
-    target_words = "88 dan 108 tagacha so'z (taxminan 42-46 soniya)" if is_long else "26 dan 36 tagacha so'z (taxminan 11-15 soniya)"
-    n_body_scenes = "5 yoki 6 ta" if is_long else "2 yoki 3 ta"
+    target_words = "92 dan 112 tagacha so'z (taxminan 42-46 soniya)" if is_long else "32 dan 42 tagacha so'z (taxminan 15-18 soniya)"
+    n_body_scenes = "5 yoki 6 ta" if is_long else "3 ta"
 
     angles = [
-        "1) Yangilik va kutilmagan raqamlar radari (news_radar + hook_stat)",
-        "2) Ko'pchilik qiladigan eski xato vs Yangi aqlli yondashuv (vs_comparison + pipeline_dm)",
-        "3) Real amaliy mexanizm va natijalar tahlili (pipeline_dm + scorecard_bars)",
-        "4) Chuqur texnik yoki strategik sirlar ochilishi (hook_stat + vs_comparison + scorecard_bars)",
+        "1) Jonli B-Roll lavha + Yangilik va raqamlar radari (broll_card + news_radar + media_card)",
+        "2) Vizual fakt-kartochka + Eski xato vs Yangi yondashuv (media_card + vs_comparison + broll_card)",
+        "3) Jonli B-Roll lavha + 3 qadamli mexanizm va natijalar (broll_card + pipeline_dm + scorecard_bars)",
+        "4) Vizual dalil + Chuqur texnik yoki strategik tahlil (media_card + broll_card + hook_stat)",
     ]
     chosen_angle = random.choice(angles)
 
     sys_p = (
         "Sen @diyor.ctr Instagram sahifasining bosh kreativ ssenaristi va motion-rejissyorisan. "
-        "Vazifang — berilgan MAVZU bo'yicha 100% ORIGINAL, TAKRORLANMAS, Fakt va Raqamlarga boy JSON blueprint yaratish!\n"
+        "Vazifang — berilgan MAVZU bo'yicha 100% ORIGINAL, TAKRORLANMAS, Fakt, Rasm va B-Roll videolarga boy JSON blueprint yaratish!\n"
         "QAT'IY QOIDALAR:\n"
         "1. QAT'IY TAQIQ: Hech qachon '10 kishilik jamoa emas', 'Eski usulda vaqt yo'qotmang', '48 soatda tayyor mahsulot', 'AI IMPERIYA' kabi shablon jumlalarni ISHLATMA (faqat foydalanuvchi aynan shu so'zni so'ragandagina ruxsat)!\n"
         "2. Har bir video MAVZUGA 100% MOS, tirik, ravon O'zbek tilida (lotin yozuvida) bo'lsin.\n"
         "3. `headlineHtml` ichida Fraunces shrifti chiroyli turishi uchun qatorni mantiqiy joydan `<br>` bilan bo'l va eng kuchli 1-2 so'zni `<em>...</em>` ichiga ol.\n"
-        "4. Sahna turlari (`scenes` ro'yxati oxirida har doim `cta_terminal` bo'lsin, undan oldin mavzuga eng moslarini tanla va aralashtir):\n"
+        "4. HAR BIR VIDEODA KAMIDA 1 TA `media_card` (mavzuga oid HD rasm kartochkasi) VA/YOKI 1 TA `broll_card` (mavzuga oid harakatlanuvchi HD B-Roll video kartochkasi) BO'LISHI SHART!\n"
+        "5. Sahna turlari (`scenes` ro'yxati oxirida har doim `cta_terminal` bo'lsin, undan oldin mavzuga eng moslarini tanla va aralashtir):\n"
+        "   - `media_card` (mavzuga oid HD rasm / yangilik kadri kartochkasi): `{\"type\":\"media_card\",\"eyebrow\":\"VIZUAL DALIL · FAKTLAR\",\"headlineHtml\":\"...\",\"captionText\":\"1 qator qisqa o'zbekcha izoh\",\"imageQuery\":\"English specific search query for photo (3-5 words)\"}`\n"
+        "   - `broll_card` (mavzuga oid jonli HD B-Roll video kartochkasi): `{\"type\":\"broll_card\",\"eyebrow\":\"JONLI LAVHA · B-ROLL\",\"headlineHtml\":\"...\",\"captionText\":\"1 qator qisqa o'zbekcha izoh\",\"brollQuery\":\"2-3 simple English visual words for stock video, e.g. 'robot technology', 'smartphone typing', 'coding screen', 'business chart'\"}`\n"
         "   - `news_radar`: yangiliklar, 3 ta fakt, trendlar uchun -> `{\"type\":\"news_radar\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"items\":[{\"badge\":\"FAKT · 01\",\"title\":\"...\",\"source\":\"...\"}, ...3 ta]}`\n"
         "   - `vs_comparison`: eski xato vs yangi yechim -> `{\"type\":\"vs_comparison\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"oldTitle\":\"...\",\"oldPoints\":[\"...\",\"...\"],\"newTitle\":\"...\",\"newPoints\":[\"...\",\"...\"]}`\n"
         "   - `hook_stat`: kuchli statistika -> `{\"type\":\"hook_stat\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"statLabel\":\"...\",\"statValue\":87,\"statSuffix\":\"%\",\"barPercent\":87}`\n"
@@ -211,12 +215,12 @@ async def generate_dynamic_ai_blueprint(topic: str, keyword: str = "SKILL", targ
         "   - `scorecard_bars`: ko'rsatkichlar tahlili -> `{\"type\":\"scorecard_bars\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"ringScore\":96,\"metrics\":[{\"label\":\"...\",\"val\":85,\"suffix\":\"%\",\"pct\":85}, ...3 ta]}`\n"
         "   - `code_architecture`: FAQAT dasturlash, AI prompt, bot yoki texnik mavzu bo'lsa ishlat -> `{\"type\":\"code_architecture\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"fileName\":\"agent.py\",\"badge\":\"AI\",\"codeLines\":[\"...\", ...4-5 qator]}`\n"
         "   - `cta_terminal` (eng oxirgi sahna): `{\"type\":\"cta_terminal\",\"eyebrow\":\"BEPUL QO'LLANMA · DIRECT\",\"headlineHtml\":\"Izohda <em>«KALIT»</em><br>deb yozing\",\"subtext\":\"...\",\"keyword\":\"KALIT\"}`\n"
-        "5. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
+        "6. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
     )
 
     usr_p = (
         f"MAVZU: {clean_topic}\n"
-        f"DAVOMIYLIK REJIMI: {'UZUN 44 SONIYALIK (6 ta sahna: 5 ta asosiy sahna + oxirida 1 ta cta_terminal)' if is_long else 'QISQA DINAMIK REEL (3 ta sahna: 2 ta asosiy sahna + oxirida 1 ta cta_terminal)'}\n"
+        f"DAVOMIYLIK REJIMI: {'UZUN 44 SONIYALIK (6-7 ta sahna: ichida ham media_card ham broll_card + tahliliy sahnalar + oxirida cta_terminal)' if is_long else 'DINAMIK REEL (4 ta sahna: ichida 1 ta media_card + 1 ta broll_card + 1 ta tahliliy sahna + oxirida cta_terminal)'}\n"
         f"DIKTOR MATNI HAJMI (`display_words_text`): {target_words}\n"
         f"TAVSIYA ETILGAN KREATIV BURCHAK: {chosen_angle}\n"
         f"FOYDALANUVCHI KALIT SO'ZI: {raw_kw if (raw_kw and raw_kw != 'SKILL') else 'Mavzuga mos qisqa soz tanla (masalan NEWS, SOTUV, AGENT, TREND, KOD)'}\n"
@@ -231,7 +235,7 @@ async def generate_dynamic_ai_blueprint(topic: str, keyword: str = "SKILL", targ
         '  "hookSubtext": "1 gaplik aniq izoh",\n'
         '  "callouts": [{"label": "FAKT", "value": "..."}, {"label": "NATIJA", "value": "..."}],\n'
         '  "display_words_text": "Diktor o\'qiydigan to\'liq, ravon, qiziqarli O\'zbekcha matn (oxirida izohda kalit so\'zni yozishga chaqirsin)",\n'
-        f'  "scenes": [ ... {n_body_scenes} asosiy sahna va eng oxirida cta_terminal ... ],\n'
+        f'  "scenes": [ ... {n_body_scenes} asosiy sahna (ichida albatta media_card va broll_card qatnashsin!) va eng oxirida cta_terminal ... ],\n'
         '  "caption": "Instagram post uchun to\'liq foydali matn va @diyor.ctr obuna + izoh CTA"\n'
         '}'
     )
@@ -628,6 +632,90 @@ def render_karaoke_overlay_onto_mp4(
             raise RuntimeError(f"Karaoke overlay failed: {err_out.decode(errors='ignore')[-400:]}")
 
 
+def _infer_english_visual_queries(topic: str) -> tuple[str, str]:
+    """Maps Uzbek/mixed topic text to clean English `(image_query, broll_query)` fallbacks."""
+    lo = (topic or "").lower()
+    if any(k in lo for k in ("robot", "optimus", "figure", "gumanoid")):
+        return ("humanoid robot artificial intelligence", "robot technology")
+    if any(k in lo for k in ("insta", "reels", "smm", "obuna", "kontent", "blog")):
+        return ("smartphone social media creator studio", "smartphone typing")
+    if any(k in lo for k in ("kod", "python", "dastur", "vibe", "claude", "gpt", "agent", "bot")):
+        return ("software developer artificial intelligence code", "coding laptop")
+    if any(k in lo for k in ("sotuv", "biznes", "pul", "daromad", "mijoz", "voronka", "crm")):
+        return ("modern business analytics growth strategy", "business chart")
+    if any(k in lo for k in ("kripto", "aksiya", "bozor", "invest", "treyd")):
+        return ("financial stock market trading screen", "stock market")
+    return ("artificial intelligence technology innovation", "futuristic technology")
+
+
+def _extract_first_frame_data_url(mp4_path: str) -> str:
+    """Extracts frame 0 of a local B-roll MP4 as a JPEG base64 data URI for seamless slide-in."""
+    import base64 as _b64
+    try:
+        ff = get_ffmpeg_bin()
+        proc = subprocess.run(
+            [ff, "-y", "-ss", "0.15", "-i", mp4_path, "-frames:v", "1", "-vf", "scale=720:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "4", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8,
+        )
+        if proc.returncode == 0 and len(proc.stdout) > 1500:
+            return "data:image/jpeg;base64," + _b64.b64encode(proc.stdout).decode("ascii")
+    except Exception:
+        pass
+    return ""
+
+
+async def hydrate_topic_media_scenes(scenes_list: list[dict[str, Any]], topic: str) -> list[dict[str, Any]]:
+    """
+    Ensures every Reel contains real topic-matched visual cards (`media_card` / `broll_card`)
+    and downloads HD images & 30fps B-roll MP4s in parallel with automatic resilient fallback.
+    """
+    if not scenes_list:
+        return scenes_list
+    fb_img_q, fb_vid_q = _infer_english_visual_queries(topic)
+    out_scenes = [dict(s) for s in scenes_list]
+
+    has_visual = any(s.get("type") in ("media_card", "broll_card") for s in out_scenes)
+    if not has_visual and len(out_scenes) >= 2:
+        short_head = re.sub(r"\s+", " ", topic).strip()[:34]
+        out_scenes.insert(
+            1,
+            {
+                "type": "broll_card",
+                "eyebrow": "JONLI LAVHA · B-ROLL",
+                "headlineHtml": f"Jarayon <em>jonli</em><br>kadrda",
+                "captionText": f"{short_head} — real jarayon",
+                "brollQuery": fb_vid_q,
+            },
+        )
+
+    async def _populate_one(sc: dict[str, Any]) -> dict[str, Any]:
+        st = sc.get("type")
+        if st == "media_card" and not sc.get("imageDataUrl"):
+            iq = str(sc.get("imageQuery") or fb_img_q).strip()
+            res = await fetch_topic_editorial_image(iq)
+            if res and res.get("data_url"):
+                sc["imageDataUrl"] = res["data_url"]
+                sc["sourceLabel"] = str(res.get("source") or "VIZUAL FAKTLAR · HD").upper()
+        elif st == "broll_card" and not sc.get("videoPath"):
+            vq = str(sc.get("brollQuery") or fb_vid_q).strip()
+            vres = await fetch_topic_broll_video(vq)
+            if vres and vres.get("path") and Path(vres["path"]).exists():
+                sc["videoPath"] = vres["path"]
+                sc["sourceLabel"] = str(vres.get("source") or "B-ROLL · HD").upper()
+                sc["posterDataUrl"] = await asyncio.to_thread(_extract_first_frame_data_url, vres["path"])
+            else:
+                # Graceful fallback to HD image card if stock video CDN is unreachable
+                iq = str(sc.get("imageQuery") or vq or fb_img_q).strip()
+                ires = await fetch_topic_editorial_image(iq)
+                if ires and ires.get("data_url"):
+                    sc["type"] = "media_card"
+                    sc["imageDataUrl"] = ires["data_url"]
+                    sc["sourceLabel"] = str(ires.get("source") or "VIZUAL FAKTLAR · HD").upper()
+        return sc
+
+    return list(await asyncio.gather(*[_populate_one(s) for s in out_scenes]))
+
+
 async def run_one_click_autopilot(
     topic: str,
     keyword: str = "SKILL",
@@ -690,24 +778,29 @@ async def run_one_click_autopilot(
     hook_frames_task = asyncio.create_task(
         render_brand_photo_parallax_frames(portrait, config=bp["hook_config"], aspect="9:16", duration=hook_dur, fps=30)
     )
+    media_task = asyncio.create_task(hydrate_topic_media_scenes(bp.get("scenes") or [], bp["topic"]))
 
-    w_res, _, hook_frames = await asyncio.gather(whisper_task, cover_task, hook_frames_task)
+    w_res, _, hook_frames, hydrated_scenes = await asyncio.gather(
+        whisper_task, cover_task, hook_frames_task, media_task
+    )
     vo_16k.unlink(missing_ok=True)
+    if hydrated_scenes:
+        bp["scenes"] = hydrated_scenes
 
     # 3. Render 9:16 Full-Frame v4 Hook + Bespoke AI-Authored Multi-Scene Story + Clawd
-    await _emit("🎬 <b>5-qadam:</b> 9:16 Claude TechBrief noyob sahnalari render qilinmoqda...")
+    await _emit("🎬 <b>5-qadam:</b> 9:16 Claude TechBrief + HD Rasm & B-Roll sahnalari render qilinmoqda...")
     raw_mp4 = out_dir / "tmp_raw_reel.mp4"
 
     ai_scenes = bp.get("scenes")
     if isinstance(ai_scenes, list) and len(ai_scenes) >= 2:
-        # Weight multi-card scenes (`news_radar`, `pipeline_dm`, `scorecard_bars`, `vs_comparison`) slightly longer than CTA
+        # Weight multi-card & visual B-roll scenes slightly longer than CTA
         weights: list[float] = []
         for sc in ai_scenes:
             st_t = sc.get("type", "hook_stat")
-            if st_t in ("news_radar", "pipeline_dm", "scorecard_bars", "vs_comparison"):
+            if st_t in ("news_radar", "pipeline_dm", "scorecard_bars", "vs_comparison", "broll_card", "media_card"):
                 weights.append(1.22)
             elif st_t == "cta_terminal":
-                weights.append(0.85)
+                weights.append(0.82)
             else:
                 weights.append(1.0)
         w_sum = sum(weights) or 1.0
