@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-🎞️ @diyor.ctr — Topic-Aware Editorial Image & HD B-Roll Video Fetcher (`topic_media_engine.py`)
-===============================================================================================
-Automatically pulls topic-relevant visual media ($0.00, zero API key required out of the box,
-plus optional Pexels/Pixabay API key support):
-  1. Moving HD B-Roll Videos (`.mp4`):
-     - Optional Pexels / Pixabay HD Vertical/Horizontal Video API (if env key set)
-     - Mixkit Free Commercial-Safe Stock HD MP4 (`assets.mixkit.co` 720p/1080p — zero key!)
-     - Wikimedia Commons Free Video API fallback
-  2. Topic Editorial Images (`.jpg` / `.png` -> base64 data URI):
-     - Live article OpenGraph (`og:image`) from top web results
-     - Wikimedia Commons / Wikipedia `1280px` real photography
-     - Pollinations Flux HD editorial visual fallback
+🎞️ @diyor.ctr — Hyper-Exact Topic Image, Real Video & 3-Shot Cinema Montage Engine (`topic_media_engine.py`)
+=============================================================================================================
+Automatically pulls 100% topic-specific visual media ($0.00, zero API key required):
+  1. Exact Real-World Press & Product HD Photos (`Bing HD Photo Search` -> `News og:image` -> `Wikimedia 1280px` -> `Flux`):
+     - Deduplicated across every scene via `avoid_urls` so every card shows a DIFFERENT real photo!
+     - Strict watermark/clipart/template domain blocker.
+  2. Hyper-Relevant Moving HD B-Roll Videos (`.mp4`):
+     - Optional Pexels HD Video API (`PEXELS_API_KEY`)
+     - Wikimedia Commons Real Topic Video (`filetype:video` `.webm`/`.mp4` -> `720p` H.264)
+     - Smart Exact-Subject Mixkit HD `720p` (NEVER blind-falls back to generic unrelated office clips!)
+     - 3-Shot Cinema Press Documentary Montage (`build_cinema_press_montage_mp4` — 3 distinct real press photos
+       animated at `30fps` with optical zoom, pan, and documentary shutter cuts for exact brands/CEOs/gadgets!).
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import hashlib
+import html as _html
 import io
-import json
 import os
 import re
 import subprocess
@@ -32,17 +32,55 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
 MEDIA_CACHE_DIR = Path("/home/user/.cache/diyor_vault/topic_media_cache")
 
+_BLOCKED_IMG_TOKENS = (
+    "shutterstock", "istockphoto", "gettyimages", "depositphotos", "123rf",
+    "dreamstime", "vecteezy", "alamy", "bigstock", "canstock", "clipart",
+    "worksheet", "template", "coloring", "pinterest.", "svg", ".gif", "logo-png",
+    "magnific", "freepik", "stockcake", "watermark", "preview",
+)
+
+_SPECIFIC_ENTITY_TOKENS = {
+    "openai", "altman", "chatgpt", "gpt", "sora", "apple", "iphone", "ipad", "macbook",
+    "airpods", "siri", "tesla", "optimus", "cybertruck", "robotaxi", "elon", "musk",
+    "spacex", "starlink", "neuralink", "nvidia", "blackwell", "rubin", "huang", "tsmc",
+    "deepseek", "anthropic", "claude", "google", "gemini", "deepmind", "microsoft",
+    "copilot", "meta", "zuckerberg", "instagram", "whatsapp", "telegram", "durov",
+    "tiktok", "samsung", "galaxy", "xiaomi", "huawei", "byd", "amazon", "netflix",
+    "bitcoin", "uzbekistan", "tashkent", "toshkent", "dubai",
+}
+
+_PHYSICAL_VIDEO_SUBJECT_MAP: list[tuple[tuple[str, ...], str]] = [
+    (("optimus", "humanoid", "robot", "robotics", "boston dynamics", "android robot"), "humanoid robot"),
+    (("chip", "microchip", "semiconductor", "wafer", "processor", "gpu", "tsmc", "nvidia", "blackwell"), "microchip processor"),
+    (("iphone", "smartphone", "mobile phone", "galaxy", "xiaomi", "ios", "android", "telegram", "instagram", "tiktok"), "smartphone screen"),
+    (("tesla", "cybertruck", "robotaxi", "byd", "electric car", "autonomous car", "driving"), "electric car"),
+    (("spacex", "starlink", "rocket", "satellite", "orbit", "mars", "nasa", "space"), "space rocket"),
+    (("server", "data center", "cloud", "supercomputer", "cluster"), "server data center"),
+    (("drone", "uav", "flying"), "drone flight"),
+    (("neuralink", "brain", "medical", "surgery", "dna", "health", "hospital"), "medical laboratory"),
+    (("bitcoin", "crypto", "stock", "trading", "trillion", "billion", "market", "finance"), "financial stock market"),
+    (("code", "coding", "python", "developer", "programming", "software", "github"), "software developer coding"),
+]
+
 
 def _slug_hash(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:14]
 
 
+def _get_ffmpeg() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_version() and imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
 def image_file_to_editorial_data_url(img_path: Path, target_w: int = 960, target_h: int = 560) -> str:
     im = Image.open(img_path).convert("RGB")
-    im = ImageOps.fit(im, (target_w, target_h), method=Image.Resampling.LANCZOS, centering=(0.5, 0.42))
-    im = ImageEnhance.Contrast(ImageEnhance.Color(im).enhance(0.96)).enhance(1.05)
+    im = ImageOps.fit(im, (target_w, target_h), method=Image.Resampling.LANCZOS, centering=(0.5, 0.38))
+    im = ImageEnhance.Contrast(ImageEnhance.Color(im).enhance(0.98)).enhance(1.05)
     buf = io.BytesIO()
-    im.save(buf, format="JPEG", quality=90)
+    im.save(buf, format="JPEG", quality=91)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -60,29 +98,135 @@ def _make_fallback_editorial_graphic(query: str, out_jpg: Path, w: int = 960, h:
     return out_jpg
 
 
+def _is_clean_photo_url(u: str) -> bool:
+    lo = u.lower()
+    if not lo.startswith(("http://", "https://")):
+        return False
+    return not any(tok in lo for tok in _BLOCKED_IMG_TOKENS)
+
+
+async def fetch_bing_hd_topic_images(
+    english_query: str,
+    max_count: int = 3,
+    avoid_urls: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Pulls up to `max_count` distinct, real-world press/product/keynote HD photos directly from
+    Bing Image Search (`form=HDRSC2`) with watermark/clipart filtering and `avoid_urls` deduplication.
+    """
+    MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    avoid = avoid_urls if avoid_urls is not None else set()
+    q_clean = re.sub(r"[^A-Za-z0-9 \-]+", " ", (english_query or "technology")).strip() or "technology news"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    search_u = (
+        f"https://www.bing.com/images/search?q={urllib.parse.quote_plus(q_clean)}"
+        "&qft=+filterui:photo-photo+filterui:imagesize-large&form=HDRSC2&first=1"
+    )
+    results: list[dict[str, Any]] = []
+    timeout = aiohttp.ClientTimeout(total=9.0)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(search_u, headers=headers) as rs:
+                if rs.status != 200:
+                    return []
+                raw_html = await rs.text(errors="ignore")
+
+            murls = [_html.unescape(u) for u in re.findall(r"murl&quot;:&quot;(https?://[^&]+?)&quot;", raw_html)]
+            if len(murls) < max_count:
+                # Retry without strict size filter if query was super niche
+                u2 = f"https://www.bing.com/images/search?q={urllib.parse.quote_plus(q_clean)}&form=HDRSC2&first=1"
+                async with sess.get(u2, headers=headers) as rs2:
+                    if rs2.status == 200:
+                        h2 = await rs2.text(errors="ignore")
+                        for extra_u in re.findall(r"murl&quot;:&quot;(https?://[^&]+?)&quot;", h2):
+                            eu = _html.unescape(extra_u)
+                            if eu not in murls:
+                                murls.append(eu)
+
+            for img_u in murls[:22]:
+                if len(results) >= max_count:
+                    break
+                if img_u in avoid or not _is_clean_photo_url(img_u):
+                    continue
+                cached_jpg = MEDIA_CACHE_DIR / f"bimg_{_slug_hash(img_u)}.jpg"
+                dom = urllib.parse.urlparse(img_u).netloc.replace("www.", "")[:22] or "Press HD"
+                if cached_jpg.exists() and cached_jpg.stat().st_size >= 16_000:
+                    avoid.add(img_u)
+                    results.append({
+                        "ok": True,
+                        "path": str(cached_jpg),
+                        "url": img_u,
+                        "data_url": image_file_to_editorial_data_url(cached_jpg),
+                        "source": dom,
+                    })
+                    continue
+
+                try:
+                    async with sess.get(img_u, headers=headers, timeout=aiohttp.ClientTimeout(total=4.5)) as ri:
+                        if ri.status != 200:
+                            continue
+                        ctype = (ri.headers.get("Content-Type") or "").lower()
+                        if "svg" in ctype or "gif" in ctype or "html" in ctype:
+                            continue
+                        raw_b = await ri.read()
+                        if len(raw_b) < 18_000:
+                            continue
+                        im = Image.open(io.BytesIO(raw_b)).convert("RGB")
+                        if im.width < 560 or im.height < 330:
+                            continue
+                        # Reject near-blank solid white/black placeholder images
+                        extrema = im.resize((32, 32)).getextrema()
+                        if all((hi - lo) < 18 for (lo, hi) in extrema):
+                            continue
+                        im.save(cached_jpg, format="JPEG", quality=92)
+                        avoid.add(img_u)
+                        results.append({
+                            "ok": True,
+                            "path": str(cached_jpg),
+                            "url": img_u,
+                            "data_url": image_file_to_editorial_data_url(cached_jpg),
+                            "source": dom,
+                        })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    return results
+
+
 async def fetch_topic_editorial_image(
     english_query: str,
     candidate_page_urls: list[str] | None = None,
+    avoid_urls: set[str] | None = None,
 ) -> dict[str, Any]:
     """
-    Returns `{"ok": True, "path": str, "data_url": str, "source": str}` for the topic's editorial photo card.
+    Returns `{"ok": True, "path": str, "data_url": str, "source": str}` for the topic's editorial photo card:
+      Tier 1: Bing Real-World Press/Product HD Photo Search (`avoid_urls`-deduplicated!)
+      Tier 2: Live article OpenGraph `og:image`
+      Tier 3: Wikimedia Commons `1280px` photography
+      Tier 4: Pollinations Flux HD fallback
     """
     MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    avoid = avoid_urls if avoid_urls is not None else set()
     q_clean = re.sub(r"[^A-Za-z0-9 \-]+", " ", (english_query or "artificial intelligence technology")).strip() or "technology business"
-    cached_jpg = MEDIA_CACHE_DIR / f"img_{_slug_hash(q_clean)}.jpg"
-    if cached_jpg.exists() and cached_jpg.stat().st_size > 8_000:
-        return {
-            "ok": True,
-            "path": str(cached_jpg),
-            "data_url": image_file_to_editorial_data_url(cached_jpg),
-            "source": "Cache · HD",
-        }
+
+    # Tier 1: Exact Real-World Press/Product HD Photo via Bing Image Search
+    bing_hits = await fetch_bing_hd_topic_images(q_clean, max_count=1, avoid_urls=avoid)
+    if bing_hits:
+        return bing_hits[0]
 
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) DiyorStudio/2.0"}
     timeout = aiohttp.ClientTimeout(total=8.0)
+    fallback_jpg = MEDIA_CACHE_DIR / f"img_{_slug_hash(q_clean + '_' + str(len(avoid)))}.jpg"
 
     async with aiohttp.ClientSession(timeout=timeout) as sess:
-        # 1. Try real OpenGraph `og:image` from top live article URLs first (authentic breaking-news visual!)
+        # Tier 2: Live News `og:image`
         for page_u in (candidate_page_urls or [])[:3]:
             try:
                 async with sess.get(page_u, headers=headers) as rp:
@@ -94,25 +238,30 @@ async def fetch_topic_editorial_image(
                         m = re.search(r'<meta[^>]+content=["\'](https?://[^"\']+)["\'][^>]+property=["\']og:image["\']', ht, flags=re.I)
                     if m:
                         img_u = m.group(1)
+                        if img_u in avoid:
+                            continue
                         async with sess.get(img_u, headers=headers) as ri:
                             if ri.status == 200:
                                 raw_b = await ri.read()
                                 if len(raw_b) >= 18_000:
                                     im = Image.open(io.BytesIO(raw_b)).convert("RGB")
                                     if im.width >= 480 and im.height >= 280:
-                                        im.save(cached_jpg, format="JPEG", quality=92)
+                                        im.save(fallback_jpg, format="JPEG", quality=92)
+                                        avoid.add(img_u)
                                         dom = urllib.parse.urlparse(page_u).netloc.replace("www.", "")
                                         return {
                                             "ok": True,
-                                            "path": str(cached_jpg),
-                                            "data_url": image_file_to_editorial_data_url(cached_jpg),
+                                            "path": str(fallback_jpg),
+                                            "data_url": image_file_to_editorial_data_url(fallback_jpg),
                                             "source": dom[:24] or "Web News",
                                         }
             except Exception:
                 continue
 
-        # 2. Try Wikimedia Commons `1280px` real photography
-        for attempt_q in (q_clean, " ".join(q_clean.split()[:2]), "modern technology computer"):
+        # Tier 3: Wikimedia Commons `1280px` photography
+        for attempt_q in (q_clean, " ".join(q_clean.split()[:2])):
+            if not attempt_q:
+                continue
             try:
                 wm_u = (
                     "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6"
@@ -127,75 +276,280 @@ async def fetch_topic_editorial_image(
                             info = (p.get("imageinfo") or [{}])[0]
                             tu = info.get("thumburl") or info.get("url")
                             w_px, h_px = int(info.get("width") or 0), int(info.get("height") or 0)
-                            if tu and w_px >= 600 and h_px >= 360 and not str(tu).lower().endswith(".svg"):
+                            if tu and tu not in avoid and w_px >= 600 and h_px >= 360 and not str(tu).lower().endswith(".svg"):
                                 async with sess.get(tu, headers={"User-Agent": "DiyorStudio/2.0 (https://diyor.ctr)"}) as ri:
                                     if ri.status == 200:
                                         raw_b = await ri.read()
                                         if len(raw_b) >= 15_000:
                                             im = Image.open(io.BytesIO(raw_b)).convert("RGB")
-                                            im.save(cached_jpg, format="JPEG", quality=92)
+                                            im.save(fallback_jpg, format="JPEG", quality=92)
+                                            avoid.add(tu)
                                             return {
                                                 "ok": True,
-                                                "path": str(cached_jpg),
-                                                "data_url": image_file_to_editorial_data_url(cached_jpg),
+                                                "path": str(fallback_jpg),
+                                                "data_url": image_file_to_editorial_data_url(fallback_jpg),
                                                 "source": "Wikimedia HD",
                                             }
             except Exception:
                 continue
 
-        # 3. Pollinations Flux HD Editorial Image Fallback ($0, zero key)
+        # Tier 4: Pollinations Flux HD Editorial Image Fallback
         try:
-            flux_prompt = urllib.parse.quote(f"editorial minimalist photography of {q_clean}, warm natural studio lighting, high detail, no text")
-            pol_u = f"https://image.pollinations.ai/prompt/{flux_prompt}?width=1024&height=600&nologo=true&seed=42"
+            seed_n = 42 + len(avoid) * 17
+            flux_prompt = urllib.parse.quote(f"editorial photojournalism of {q_clean}, realistic photography, natural lighting, high detail, no text")
+            pol_u = f"https://image.pollinations.ai/prompt/{flux_prompt}?width=1024&height=600&nologo=true&seed={seed_n}"
             async with sess.get(pol_u, headers=headers) as rp:
                 if rp.status == 200:
                     raw_b = await rp.read()
                     if len(raw_b) >= 15_000:
                         im = Image.open(io.BytesIO(raw_b)).convert("RGB")
-                        im.save(cached_jpg, format="JPEG", quality=92)
+                        im.save(fallback_jpg, format="JPEG", quality=92)
+                        avoid.add(pol_u)
                         return {
                             "ok": True,
-                            "path": str(cached_jpg),
-                            "data_url": image_file_to_editorial_data_url(cached_jpg),
+                            "path": str(fallback_jpg),
+                            "data_url": image_file_to_editorial_data_url(fallback_jpg),
                             "source": "AI Visual · HD",
                         }
         except Exception:
             pass
 
-    _make_fallback_editorial_graphic(q_clean, cached_jpg)
+    _make_fallback_editorial_graphic(q_clean, fallback_jpg)
     return {
         "ok": True,
-        "path": str(cached_jpg),
-        "data_url": image_file_to_editorial_data_url(cached_jpg),
+        "path": str(fallback_jpg),
+        "data_url": image_file_to_editorial_data_url(fallback_jpg),
         "source": "@diyor.ctr Visual",
     }
 
 
-async def fetch_topic_broll_video(english_query: str, avoid_urls: set[str] | None = None) -> dict[str, Any] | None:
+def _render_press_montage_sync(
+    image_paths: list[str],
+    out_mp4: Path,
+    w: int = 1280,
+    h: int = 720,
+    duration: float = 4.5,
+    fps: int = 30,
+) -> Path:
     """
-    Downloads a real commercial-safe 720p/1080p MP4 B-roll video matching `english_query` ($0, zero key!):
-      1. Optional Pexels API (if `PEXELS_API_KEY` env var is present)
-      2. Mixkit Free Stock HD MP4 (`assets.mixkit.co/videos/...-720.mp4` — zero key!)
+    Streams a 3-shot dynamic cinema documentary B-Roll MP4 (`30fps` optical zoom + pan + crisp
+    2-frame shutter cut) directly to FFmpeg stdin using `< 10 MB` RAM!
+    """
+    ffmpeg_bin = _get_ffmpeg()
+    valid_imgs = [Image.open(p).convert("RGB") for p in image_paths if Path(p).exists()]
+    if not valid_imgs:
+        return out_mp4
+
+    # Pre-fit each shot to 1.18x overscan so per-frame crop is instant and razor-sharp
+    OW, OH = int(round(w * 1.18)), int(round(h * 1.18))
+    overscanned = [
+        ImageEnhance.Contrast(
+            ImageOps.fit(im, (OW, OH), method=Image.Resampling.LANCZOS, centering=(0.5, 0.36))
+        ).enhance(1.05)
+        for im in valid_imgs
+    ]
+
+    total_frames = max(45, int(round(duration * fps)))
+    n_shots = len(overscanned)
+    frames_per_shot = max(15, total_frames // n_shots)
+
+    out_mp4.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        [
+            ffmpeg_bin, "-y",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(out_mp4),
+        ],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+    try:
+        for f_idx in range(total_frames):
+            s_idx = min(n_shots - 1, f_idx // frames_per_shot)
+            local_f = f_idx - s_idx * frames_per_shot
+            prog = min(1.0, local_f / max(1, frames_per_shot - 1))
+            src = overscanned[s_idx]
+
+            # Alternate optical motion per shot: Shot 0 push-in right, Shot 1 pull-out left, Shot 2 center push-in
+            if s_idx % 3 == 0:
+                zoom = 1.00 + 0.12 * prog
+                pan_x, pan_y = 0.35 + 0.30 * prog, 0.38
+            elif s_idx % 3 == 1:
+                zoom = 1.13 - 0.11 * prog
+                pan_x, pan_y = 0.65 - 0.30 * prog, 0.42
+            else:
+                zoom = 1.01 + 0.13 * prog
+                pan_x, pan_y = 0.50, 0.52 - 0.18 * prog
+
+            cw = max(w, min(OW, int(round(OW / zoom))))
+            ch = max(h, min(OH, int(round(OH / zoom))))
+            x0 = int(round((OW - cw) * pan_x))
+            y0 = int(round((OH - ch) * pan_y))
+            frame_im = src.crop((x0, y0, x0 + cw, y0 + ch)).resize((w, h), Image.Resampling.BILINEAR)
+
+            # Crisp 2-frame documentary shutter flash on cut transitions (`s_idx > 0` and `local_f < 2`)
+            if s_idx > 0 and local_f < 2:
+                boost = 1.22 if local_f == 0 else 1.10
+                frame_im = ImageEnhance.Brightness(frame_im).enhance(boost)
+
+            if proc.stdin:
+                proc.stdin.write(frame_im.tobytes())
+    finally:
+        if proc.stdin:
+            proc.stdin.close()
+        proc.wait()
+
+    return out_mp4
+
+
+async def build_cinema_press_montage_mp4(
+    english_query: str,
+    avoid_urls: set[str] | None = None,
+    w: int = 1280,
+    h: int = 720,
+    duration: float = 4.5,
+) -> dict[str, Any] | None:
+    """
+    Fetches 3 distinct real-world press/product HD photos for `english_query` and renders
+    a 30fps 3-Shot Cinema Documentary B-Roll MP4 (`KINO-XRONIKA · HD`).
+    """
+    avoid = avoid_urls if avoid_urls is not None else set()
+    hits = await fetch_bing_hd_topic_images(english_query, max_count=3, avoid_urls=avoid)
+    if len(hits) < 2:
+        # Supplement with secondary angle query if needed
+        extra = await fetch_bing_hd_topic_images(f"{english_query} press photo", max_count=3 - len(hits), avoid_urls=avoid)
+        hits.extend(extra)
+    if not hits:
+        return None
+
+    img_paths = [h_item["path"] for h_item in hits if h_item.get("path")]
+    key_sig = "_".join(img_paths) + f"_{w}x{h}"
+    out_mp4 = MEDIA_CACHE_DIR / f"montage_{_slug_hash(key_sig)}.mp4"
+    if not out_mp4.exists() or out_mp4.stat().st_size < 35_000:
+        await asyncio.to_thread(_render_press_montage_sync, img_paths, out_mp4, w, h, duration, 30)
+
+    if out_mp4.exists() and out_mp4.stat().st_size >= 35_000:
+        return {
+            "ok": True,
+            "path": str(out_mp4),
+            "url": f"montage://{_slug_hash(key_sig)}",
+            "source": f"REAL KADR · {len(img_paths)} FOTO",
+        }
+    return None
+
+
+def _extract_physical_video_subject(query: str) -> str | None:
+    lo = query.lower()
+    for triggers, mapped_q in _PHYSICAL_VIDEO_SUBJECT_MAP:
+        if any(t in lo for t in triggers):
+            return mapped_q
+    return None
+
+
+def _has_specific_entity(query: str) -> bool:
+    tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
+    return bool(tokens & _SPECIFIC_ENTITY_TOKENS)
+
+
+async def _try_wikimedia_topic_video(
+    sess: aiohttp.ClientSession,
+    query: str,
+    avoid: set[str],
+) -> dict[str, Any] | None:
+    """Searches Wikimedia Commons `filetype:video` for real research/press/hardware clips and converts to H.264 MP4."""
+    try:
+        wm_u = (
+            "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6"
+            f"&gsrsearch={urllib.parse.quote('filetype:video ' + query)}&gsrlimit=5"
+            "&prop=imageinfo&iiprop=url|size|mime&format=json"
+        )
+        async with sess.get(wm_u, headers={"User-Agent": "DiyorStudio/2.0 (https://diyor.ctr)"}) as rw:
+            if rw.status != 200:
+                return None
+            wd = await rw.json()
+            pages = list((wd.get("query") or {}).get("pages", {}).values())
+            for p in pages:
+                title_lo = str(p.get("title") or "").lower()
+                if any(bad in title_lo for bad in ("ai generated", "animation test", "logo", "spoken")):
+                    continue
+                info = (p.get("imageinfo") or [{}])[0]
+                vu = info.get("url") or ""
+                sz = int(info.get("size") or 0)
+                if not vu or vu in avoid or sz < 150_000 or sz > 24_000_000:
+                    continue
+                out_mp4 = MEDIA_CACHE_DIR / f"wmv_{_slug_hash(vu)}.mp4"
+                if not out_mp4.exists() or out_mp4.stat().st_size < 40_000:
+                    raw_ext = ".webm" if ".webm" in vu.lower() else ".ogv"
+                    tmp_in = MEDIA_CACHE_DIR / f"tmp_wm_{_slug_hash(vu)}{raw_ext}"
+                    async with sess.get(vu, headers={"User-Agent": "DiyorStudio/2.0 (https://diyor.ctr)"}, timeout=aiohttp.ClientTimeout(total=10.0)) as dl:
+                        if dl.status != 200:
+                            continue
+                        tmp_in.write_bytes(await dl.read())
+                    ff = _get_ffmpeg()
+                    subprocess.run(
+                        [
+                            ff, "-y", "-i", str(tmp_in), "-t", "7.0",
+                            "-an", "-vf", "fps=30,scale=1280:-2",
+                            "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+                            str(out_mp4),
+                        ],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=18,
+                    )
+                    tmp_in.unlink(missing_ok=True)
+                if out_mp4.exists() and out_mp4.stat().st_size >= 40_000:
+                    avoid.add(vu)
+                    return {"ok": True, "path": str(out_mp4), "url": vu, "source": "Wikimedia Video · HD"}
+    except Exception:
+        pass
+    return None
+
+
+async def fetch_topic_broll_video(
+    english_query: str,
+    avoid_urls: set[str] | None = None,
+    prefer_press_montage: bool = False,
+    portrait_hook: bool = False,
+) -> dict[str, Any] | None:
+    """
+    Fetches a 100% topic-relevant 720p/1080p MP4 B-roll video ($0, zero key!):
+      1. If `prefer_press_montage=True` (or specific named entity like `Apple iPhone 17`, `Sam Altman`,
+         `Tesla Optimus` when stock footage wouldn't show the real product/person): builds a 3-Shot
+         Real-World Press Cinema Montage MP4 (`REAL KADR · 3 FOTO`)!
+      2. Optional Pexels HD Video API (if `PEXELS_API_KEY` set)
+      3. Wikimedia Commons Real Video (`filetype:video`)
+      4. Exact-Subject Mixkit Free HD Stock MP4 (NEVER blind-falls back to generic unrelated office stock!)
+      5. Guaranteed 3-Shot Real-World Press Cinema Montage fallback!
     """
     MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     avoid = avoid_urls if avoid_urls is not None else set()
-    q_clean = re.sub(r"[^A-Za-z0-9 \-]+", " ", (english_query or "technology laptop coding")).strip() or "technology laptop"
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-    timeout = aiohttp.ClientTimeout(total=14.0)
+    q_clean = re.sub(r"[^A-Za-z0-9 \-]+", " ", (english_query or "technology")).strip() or "technology"
+    mw, mh = (1080, 1920) if portrait_hook else (1280, 720)
 
-    candidate_queries = [
-        q_clean,
-        " ".join(q_clean.split()[:2]),
-        "artificial intelligence technology",
-        "business office laptop",
-    ]
+    # When `prefer_press_montage=True`, immediately build a 3-shot real press documentary reel of the exact topic!
+    if prefer_press_montage:
+        pm = await build_cinema_press_montage_mp4(q_clean, avoid_urls=avoid, w=mw, h=mh, duration=4.6)
+        if pm:
+            return pm
+
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+    timeout = aiohttp.ClientTimeout(total=12.0)
+
+    # Build ONLY topic-faithful video search queries (ZERO generic 'business office laptop' pollution!)
+    phys_subj = _extract_physical_video_subject(q_clean)
+    exact_mixkit_queries: list[str] = []
+    if not _has_specific_entity(q_clean):
+        exact_mixkit_queries.append(q_clean)
+    if phys_subj and phys_subj not in exact_mixkit_queries:
+        exact_mixkit_queries.append(phys_subj)
 
     async with aiohttp.ClientSession(timeout=timeout) as sess:
-        # 1. Optional Pexels Video API if user configured `PEXELS_API_KEY`
+        # 1. Optional Pexels Video API if configured
         px_key = os.getenv("PEXELS_API_KEY", "").strip()
         if px_key:
             try:
-                px_u = f"https://api.pexels.com/videos/search?query={urllib.parse.quote(q_clean)}&per_page=5&orientation=landscape"
+                orient = "portrait" if portrait_hook else "landscape"
+                px_u = f"https://api.pexels.com/videos/search?query={urllib.parse.quote(phys_subj or q_clean)}&per_page=6&orientation={orient}"
                 async with sess.get(px_u, headers={"Authorization": px_key}) as rpx:
                     if rpx.status == 200:
                         pd = await rpx.json()
@@ -214,8 +568,20 @@ async def fetch_topic_broll_video(english_query: str, avoid_urls: set[str] | Non
             except Exception:
                 pass
 
-        # 2. Zero-key Mixkit Free Stock HD MP4 (`assets.mixkit.co`)
-        for cq in candidate_queries:
+        # 2. If query names a specific real-world brand/CEO/product AND it's the Hero Hook (`portrait_hook=True`),
+        #    show the ACTUAL real-world product/person in a 3-Shot Cinema Press Montage first!
+        if portrait_hook and _has_specific_entity(q_clean):
+            pm_hero = await build_cinema_press_montage_mp4(q_clean, avoid_urls=avoid, w=mw, h=mh, duration=3.6)
+            if pm_hero:
+                return pm_hero
+
+        # 3. Wikimedia Commons Real Topic Video (`filetype:video`)
+        wm_vid = await _try_wikimedia_topic_video(sess, q_clean, avoid)
+        if wm_vid:
+            return wm_vid
+
+        # 4. Exact-Subject Mixkit HD Stock MP4 (only when physical visual subject matches!)
+        for cq in exact_mixkit_queries:
             if not cq:
                 continue
             try:
@@ -224,14 +590,18 @@ async def fetch_topic_broll_video(english_query: str, avoid_urls: set[str] | Non
                     if rs.status != 200:
                         continue
                     ht = await rs.text(errors="ignore")
-                    # Prefer 720p MP4 (fast 3-7 MB download, razor-sharp inside 912x510 card!) then 1080p/large
-                    hits_720 = re.findall(r"https://assets\.mixkit\.co/videos/\d+/\d+-720\.mp4", ht)
-                    hits_other = re.findall(r"https://assets\.mixkit\.co/videos/\d+/\d+-(?:1080|large|360)\.mp4", ht)
+                    # Extract only card blocks whose title/slug actually matches at least one query word!
+                    q_words = [w for w in re.findall(r"[a-z0-9]{3,}", cq.lower()) if w not in ("the", "and", "for", "video", "screen")]
+                    card_blocks = re.findall(r'item-grid-card.*?</div>\s*</div>', ht, flags=re.S | re.I) or [ht[:12000]]
                     seen_u: list[str] = []
-                    for u in hits_720 + hits_other:
-                        if u not in seen_u and u not in avoid:
-                            seen_u.append(u)
-                    for chosen_u in seen_u[:3]:
+                    for blk in card_blocks:
+                        blk_lo = blk.lower()
+                        if q_words and not any(qw in blk_lo for qw in q_words):
+                            continue
+                        for u in re.findall(r"https://assets\.mixkit\.co/videos/\d+/\d+-(?:720|1080|large)\.mp4", blk):
+                            if u not in seen_u and u not in avoid:
+                                seen_u.append(u)
+                    for chosen_u in seen_u[:4]:
                         out_mp4 = MEDIA_CACHE_DIR / f"broll_{_slug_hash(chosen_u)}.mp4"
                         if not out_mp4.exists() or out_mp4.stat().st_size < 40_000:
                             async with sess.get(chosen_u, headers=headers) as dl:
@@ -241,14 +611,16 @@ async def fetch_topic_broll_video(english_query: str, avoid_urls: set[str] | Non
                                         out_mp4.write_bytes(data)
                         if out_mp4.exists() and out_mp4.stat().st_size >= 40_000:
                             avoid.add(chosen_u)
-                            return {"ok": True, "path": str(out_mp4), "url": chosen_u, "source": "HD B-Roll"}
+                            return {"ok": True, "path": str(out_mp4), "url": chosen_u, "source": "JONLI LAVHA · HD"}
             except Exception:
                 continue
-    return None
+
+    # 5. Guaranteed Exact-Topic 3-Shot Real-World Press Cinema Montage (ZERO generic office stock fallback!)
+    return await build_cinema_press_montage_mp4(q_clean, avoid_urls=avoid, w=mw, h=mh, duration=4.5)
 
 
 def build_rounded_alpha_mask_png(out_png: Path, w: int, h: int, radius: int = 24) -> Path:
-    """Creates an 8x supersampled anti-aliased rounded-rectangle alpha mask for FFmpeg `alphamerge`."""
+    """Creates a 4x supersampled anti-aliased rounded-rectangle alpha mask for FFmpeg `alphamerge`."""
     scale = 4
     big = Image.new("L", (w * scale, h * scale), 0)
     d = ImageDraw.Draw(big)
@@ -296,19 +668,17 @@ def composite_broll_windows_onto_mp4(
         if not mask_png.exists():
             build_rounded_alpha_mask_png(mask_png, cw, ch, rad)
 
-        # Input indices: base=0, then for each idx: broll=(1 + 2*idx), mask=(2 + 2*idx)
         in_v = 1 + 2 * idx
         in_m = 2 + 2 * idx
         cmd += ["-stream_loop", "-1", "-t", str(dur), "-i", vp, "-loop", "1", "-t", str(dur), "-i", str(mask_png)]
 
-        # Center-crop B-roll to card size, subtle editorial contrast, shift PTS to `t0`, merge rounded alpha mask, fade in!
         filter_parts.append(
             f"[{in_v}:v]fps={fps},scale={cw}:{ch}:force_original_aspect_ratio=increase,"
-            f"crop={cw}:{ch},eq=contrast=1.04:saturation=0.95,format=yuv420p[bv{idx}]"
+            f"crop={cw}:{ch},eq=contrast=1.04:saturation=0.98,format=yuv420p[bv{idx}]"
         )
         filter_parts.append(f"[{in_m}:v]scale={cw}:{ch},format=gray[bm{idx}]")
         filter_parts.append(
-            f"[bv{idx}][bm{idx}]alphamerge,fade=t=in:st=0:d=0.28:alpha=1,"
+            f"[bv{idx}][bm{idx}]alphamerge,fade=t=in:st=0:d=0.25:alpha=1,"
             f"setpts=PTS-STARTPTS+{t0:.3f}/TB[bov{idx}]"
         )
         nxt_v = f"[vo{idx}]"
@@ -338,8 +708,8 @@ async def render_news_broll_hook_frames(
 ) -> list[bytes]:
     """
     Mode 2 (`news` / high-views) Opening Hook:
-    1-soniyadanoq to'liq ekranli (1080x1920) harakatlanuvchi HD B-Roll video + sensatsion Fraunces yangilik sarlavhasi!
-    Returns `list[bytes]` of `1080*1920*3` RGB frames for `prepend_rgb_frames`.
+    1-soniyadanoq to'liq ekranli (1080x1920) harakatlanuvchi Real-Kadr B-Roll video + sensatsion Fraunces sarlavhasi!
+    Returns `list[bytes]` of HQ JPEG frames (`~15 MB` total RAM) for `prepend_rgb_frames`.
     """
     from playwright.async_api import async_playwright
 
@@ -353,9 +723,6 @@ async def render_news_broll_hook_frames(
     c1 = callouts[0] if len(callouts) >= 1 else {"label": "FAKT", "value": "2026 Trend"}
     c2 = callouts[1] if len(callouts) >= 2 else {"label": "MANBA", "value": "Global Tech"}
 
-    # Render TWO transparent RGBA layers in Chromium:
-    # 1) Static cinema vignette + top/bottom @DIYOR.CTR HUD
-    # 2) Animated news headline card + fact badges (for smooth 12-frame entrance slide!)
     overlay_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <link rel="stylesheet" href="{fonts_css}">
     <style>
@@ -425,7 +792,6 @@ async def render_news_broll_hook_frames(
     hud_rgba = Image.open(io.BytesIO(hud_png)).convert("RGBA")
     card_rgba = Image.open(io.BytesIO(card_png)).convert("RGBA")
 
-    # Precompute the 11 entrance-slide card frames once (tiny, reusable)
     entrance_cards: list[Image.Image] = []
     for idx in range(11):
         t_in = idx / 10.0
@@ -437,14 +803,13 @@ async def render_news_broll_hook_frames(
         shifted.paste(Image.merge("RGBA", (r, g, b, a)), (0, y_off))
         entrance_cards.append(shifted)
 
-    # Stream oversized 1144x2034 frames ONE BY ONE from FFmpeg and compress each output frame as HQ JPEG (~15 MB total RAM!)
     OW, OH = 1144, 2034
     out_jpg_frames: list[bytes] = []
 
     def _finish_frame(src_im: Image.Image, idx_f: int) -> bytes:
         prog = idx_f / max(1, n_frames - 1)
-        dx = int(round((OW - W) * (0.5 - 0.35 * prog)))
-        dy = int(round((OH - H) * (0.35 + 0.25 * prog)))
+        dx = int(round((OW - W) * (0.5 - 0.32 * prog)))
+        dy = int(round((OH - H) * (0.34 + 0.22 * prog)))
         cropped = src_im.crop((dx, dy, dx + W, dy + H)).convert("RGBA")
         cropped = Image.alpha_composite(cropped, hud_rgba)
         cropped = Image.alpha_composite(cropped, entrance_cards[idx_f] if idx_f < 11 else card_rgba)
@@ -457,7 +822,7 @@ async def render_news_broll_hook_frames(
             [
                 ffmpeg_bin, "-y", "-stream_loop", "-1", "-i", str(broll_mp4),
                 "-frames:v", str(n_frames),
-                "-vf", f"fps={fps},scale={OW}:{OH}:force_original_aspect_ratio=increase,crop={OW}:{OH},eq=contrast=1.06:saturation=1.04",
+                "-vf", f"fps={fps},scale={OW}:{OH}:force_original_aspect_ratio=increase,crop={OW}:{OH},eq=contrast=1.05:saturation=1.03",
                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
             ],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -548,4 +913,3 @@ async def render_news_cover_slide(
     finally:
         tmp_h.unlink(missing_ok=True)
     return out_png
-

@@ -49,21 +49,23 @@ jobs:
             cp -f "$GITHUB_WORKSPACE/uploads/IMG_2860_DIYOR_CTR.jpg" /home/user/uploads/IMG_2860_DIYOR_CTR.jpg
           fi
 
-      - name: u2net va Clawd sprite keshini tiklash
+      - name: u2net, Silero 48kHz va Clawd sprite keshini tiklash
         uses: actions/cache@v4
         with:
           path: |
             /home/user/.cache/u2net_models
+            /home/user/.cache/diyor_vault/models
             /home/user/.cache/diyor_vault/clawd_bank_v1
             /home/user/.cache/diyor_vault/matte_cache
             ~/.cache/pip
-          key: diyor-ctr-studio-cache-v1
+          key: diyor-ctr-studio-cache-v2
 
       - name: Sistemali kutubxonalar va Playwright Chromium
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg rubberband-cli libsndfile1 fonts-dejavu-core
           pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install playwright pillow opencv-python-headless numpy scipy rembg onnxruntime edge-tts pedalboard soundfile imageio-ffmpeg aiohttp
           playwright install --with-deps chromium
 
@@ -85,12 +87,12 @@ jobs:
           async def main():
               out_d = Path("/home/user/.cache/diyor_vault/gh_out")
               res = await run_one_click_autopilot(
-                  topic=os.environ.get("RENDER_TOPIC", "2026 yilgi eng muhim AI yangiliklari"),
+                  topic=os.environ.get("RENDER_TOPIC", "TOP"),
                   keyword=os.environ.get("RENDER_KEYWORD", ""),
                   out_dir=out_d,
-                  voice_profile="modal_bariton_hd",
+                  voice_profile="uzbek_bilingual_hd",
                   with_subtitles=True,
-                  target_duration=float(os.environ.get("RENDER_DURATION", "17")),
+                  target_duration=float(os.environ.get("RENDER_DURATION", "19")),
                   video_mode=os.environ.get("RENDER_MODE", "auto"),
               )
               tok = (os.environ.get("TG_BOT_TOKEN") or "").strip()

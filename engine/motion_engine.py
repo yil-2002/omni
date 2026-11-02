@@ -999,7 +999,15 @@ async def render_html_timeline_to_mp4(
 
         n_html_frames = int(round(html_dur * fps))
         cpu_cap = max(1, os.cpu_count() or 2)
-        n_workers = max(1, min(int(parallel_workers), cpu_cap, max(1, n_html_frames // 45)))
+        ram_worker_cap = int(parallel_workers)
+        try:
+            mem_txt = Path("/proc/meminfo").read_text(encoding="utf-8", errors="ignore")
+            ma = re.search(r"MemAvailable:\s*(\d+)", mem_txt)
+            if ma and int(ma.group(1)) < 2_200_000:
+                ram_worker_cap = 1
+        except Exception:
+            pass
+        n_workers = max(1, min(int(parallel_workers), ram_worker_cap, cpu_cap, max(1, n_html_frames // 45)))
         shifted_cuts = ([round(prep_dur, 3)] if prep_dur > 0 else []) + [round(prep_dur + c, 3) for c in (cuts or [])]
 
         with tempfile.TemporaryDirectory(prefix="tb_par_", dir=str(VAULT_TMP)) as tmpdir:

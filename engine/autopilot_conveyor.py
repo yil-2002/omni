@@ -84,17 +84,173 @@ def resolve_video_mode(topic: str, keyword: str = "", video_mode: str = "auto") 
     if kw_clean and kw_clean not in ("SKILL", "AUTO", "NONE", "YOQ"):
         return "edu"
     lo = (topic or "").lower()
+    if lo.strip() in ("top", "auto_top", "trend", "top_mavzu"):
+        return "news"
     edu_signals = ("qanday", "o'rgan", "organ", "qo'llanma", "qollanma", "qadam", "voronka", "kurs", "dars", "strategiya", "sotuv tizimi", "follow-gate")
     news_signals = (
-        "yangilik", "xabar", "chiqdi", "taqdim", "inqilob", "shok", "prosmotr", "fakt",
-        "robot", "openai", "gpt", "gemini", "claude 4", "tesla", "apple", "google", "meta", "nvidia",
-        "dunyo", "2026", "nima bo'ldi", "elon", "sam altman", "xitoy", "amerika",
+        "yangilik", "xabar", "chiqdi", "taqdim", "inqilob", "shok", "prosmotr", "fakt", "top", "trend",
+        "robot", "openai", "gpt", "gemini", "claude 4", "tesla", "apple", "iphone", "google", "meta", "nvidia",
+        "dunyo", "2026", "nima bo'ldi", "elon", "sam altman", "durov", "telegram", "xitoy", "amerika",
     )
     if any(w in lo for w in edu_signals) and not any(w in lo for w in ("yangilik", "xabar", "prosmotr")):
         return "edu"
     if any(w in lo for w in news_signals):
         return "news"
     return "edu"
+
+
+_VIRAL_BRAND_BOOST = (
+    "openai", "chatgpt", "gpt", "apple", "iphone", "siri", "tesla", "optimus", "elon musk",
+    "nvidia", "google", "gemini", "deepseek", "anthropic", "claude", "meta", "instagram",
+    "telegram", "durov", "tiktok", "youtube", "robot", "humanoid", "chip", "trillion", "billion", "ai ",
+)
+
+
+async def fetch_viral_top_topics(limit: int = 6) -> list[dict[str, Any]]:
+    """
+    🔥 Live Viral Explore-Ready Topic Radar (`Topga chiqadigan mavzular`):
+    Pulls breaking global tech/AI/money stories from Google News Tech RSS + HackerNews Front Page,
+    scores them by Instagram Reels viral curiosity & mass appeal, and frames them in crisp Uzbek!
+    """
+    raw_candidates: list[dict[str, Any]] = []
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) DiyorStudio/2.0"}
+    timeout = aiohttp.ClientTimeout(total=6.5)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            gnews_u = "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=en-US&gl=US&ceid=US:en"
+            hn_u = "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=16"
+            r_gn, r_hn = await asyncio.gather(
+                sess.get(gnews_u, headers=headers),
+                sess.get(hn_u, headers=headers),
+                return_exceptions=True,
+            )
+            if not isinstance(r_gn, Exception) and r_gn.status == 200:
+                xml_txt = await r_gn.text(errors="ignore")
+                items = re.findall(r"<item>(.*?)</item>", xml_txt, flags=re.S)
+                for it in items[:18]:
+                    tm = re.search(r"<title>(.*?)</title>", it, flags=re.S)
+                    if not tm:
+                        continue
+                    t_str = _html.unescape(re.sub(r"<!\[CDATA\[|\]\]>", "", tm.group(1))).strip()
+                    src = ""
+                    if " - " in t_str:
+                        t_str, src = t_str.rsplit(" - ", 1)
+                    if len(t_str) >= 22:
+                        raw_candidates.append({"en_title": t_str.strip(), "source": src.strip() or "Google News", "base_pts": 65})
+
+            if not isinstance(r_hn, Exception) and r_hn.status == 200:
+                hn_d = await r_hn.json()
+                for h in (hn_d.get("hits") or [])[:15]:
+                    ht = str(h.get("title") or "").strip()
+                    pts = int(h.get("points") or 0)
+                    if len(ht) >= 20:
+                        raw_candidates.append({"en_title": ht, "source": f"HN · {pts}▲", "base_pts": min(95, 45 + pts // 8)})
+    except Exception:
+        pass
+
+    # Score for Instagram Reels Explore virality (mass audience + giant brands + numbers + AI/future shock)
+    scored: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for c in raw_candidates:
+        en_t = c["en_title"]
+        lo = en_t.lower()
+        dedup_k = " ".join(re.findall(r"[a-z0-9]+", lo)[:4])
+        if not dedup_k or dedup_k in seen_keys:
+            continue
+        seen_keys.add(dedup_k)
+        score = int(c["base_pts"])
+        for b in _VIRAL_BRAND_BOOST:
+            if b in lo:
+                score += 18
+        if re.search(r"\$?\d+\s*(?:billion|trillion|million|%|x)\b|\b2026\b|\bnew\b|\blaunch|\bunveil|\bbreakthrough", lo):
+            score += 14
+        scored.append({**c, "viral_score": min(99, score)})
+
+    scored.sort(key=lambda x: x["viral_score"], reverse=True)
+    top_raw = scored[: max(limit, 6)]
+
+    # Frame into punchy Explore-worthy Uzbek viral hooks via Frontier LLM (fast JSON array)
+    if top_raw:
+        numbered = "\n".join(f"{i+1}. {x['en_title']} ({x['source']})" for i, x in enumerate(top_raw[:limit]))
+        sys_tr = (
+            "Sen Instagram Reels'da millionlab prosmotr yig'adigan @diyor.ctr kanalining bosh muharririsan. "
+            "Quyidagi real jahon texno-xabarlarini O'zbek auditoriyasi uchun TOPGA CHIQADIGAN, qiziqish uyg'otadigan (curiosity gap), "
+            "lekin 100% rost va tabiiy O'zbek tilidagi (lotin yozuvida) mavzu sarlavhalariga aylantir. "
+            "FAQAT JSON ro'yxat qaytar: [{\"idx\":1,\"uz_topic\":\"...\",\"mode\":\"news\",\"why_viral\":\"...\"}]"
+        )
+        raw_tr = await _call_frontier_director_llm(sys_tr, numbered)
+        try:
+            i0, i1 = raw_tr.find("["), raw_tr.rfind("]")
+            if i0 >= 0 and i1 > i0:
+                arr = json.loads(raw_tr[i0 : i1 + 1])
+                if isinstance(arr, list) and len(arr) >= 2:
+                    enriched: list[dict[str, Any]] = []
+                    for i, item in enumerate(top_raw[:limit]):
+                        m_obj = next((a for a in arr if isinstance(a, dict) and int(a.get("idx") or 0) == i + 1), None) or (arr[i] if i < len(arr) and isinstance(arr[i], dict) else {})
+                        uz_t = str(m_obj.get("uz_topic") or item["en_title"]).strip()
+                        enriched.append({
+                            "rank": i + 1,
+                            "uz_topic": uz_t,
+                            "en_title": item["en_title"],
+                            "source": item["source"],
+                            "viral_score": item["viral_score"],
+                            "mode": "news",
+                            "why_viral": str(m_obj.get("why_viral") or "Global texno trend · Yuqori ushlab qolish (Retention)"),
+                        })
+                    return enriched
+        except Exception:
+            pass
+
+    # High-impact curated + live fallback list if LLM formatting skipped
+    curated = [
+        {
+            "rank": 1,
+            "uz_topic": "Tesla Optimus gumanoid robotlari fabrikalarda odamlar o‘rnida ish boshladi: 2026-yilgi real kadrlar va narxi",
+            "en_title": "Tesla Optimus humanoid robots begin autonomous factory deployment in 2026",
+            "source": "Global Tech · Trend #1",
+            "viral_score": 98,
+            "mode": "news",
+            "why_viral": "Vizual robot kadrlari + kelajak kasblari bahsi (Explore CTR 98/100)",
+        },
+        {
+            "rank": 2,
+            "uz_topic": "Apple va OpenAI yangi avlod AI chiplari poygasi: iPhone endi internetsiz ham fikrlay oladimi?",
+            "en_title": "Apple and OpenAI race on custom AI silicon for on-device iPhone intelligence",
+            "source": "Apple & AI · Trend #2",
+            "viral_score": 96,
+            "mode": "news",
+            "why_viral": "Har bir smartfon egasiga tegishli mavzu + kuchli brendlar to‘qnashuvi",
+        },
+        {
+            "rank": 3,
+            "uz_topic": "Nvidia va sun’iy intellekt superkompyuterlari: nega bitta kichik chip oltindan ham qimmat bo‘lib ketdi?",
+            "en_title": "Nvidia next-generation AI GPU superchips reshape global trillion-dollar economy",
+            "source": "Bloomberg Tech · Trend #3",
+            "viral_score": 95,
+            "mode": "news",
+            "why_viral": "Katta pul va texnologiya siri — yuqori saqlash (Save) va ulashish (Share)",
+        },
+        {
+            "rank": 4,
+            "uz_topic": "Pavel Durov va Telegram yangi AI davrida: messenjer ichida nimalar tubdan o‘zgarmoqda?",
+            "en_title": "Pavel Durov expands Telegram AI ecosystem for billion monthly users",
+            "source": "Telegram News · Trend #4",
+            "viral_score": 94,
+            "mode": "news",
+            "why_viral": "O‘zbekistonda eng ommabop ilova — 100% ommaviy qiziqish",
+        },
+        {
+            "rank": 5,
+            "uz_topic": "ChatGPT va Claude yordamida kunlik 4 soatlik ishni 15 daqiqada bajarishning 3 ta aniq usuli",
+            "en_title": "Practical AI workflow automation with Claude and ChatGPT",
+            "source": "@diyor.ctr · Amaliy Top",
+            "viral_score": 92,
+            "mode": "edu",
+            "why_viral": "Yuqori Save + Follow-Gate konversiyasi (1-yo‘nalish O‘rganish)",
+        },
+    ]
+    return curated[:limit]
 
 
 async def _fetch_live_topic_facts(topic: str) -> str:
@@ -242,9 +398,9 @@ async def generate_dynamic_ai_blueprint(
             "'Obuna bo'lib qo'ysangiz, har kuni shunday eng muhim yangilik va tahlillarni joylab boramiz!' mazmunidagi iliq chaqiriq bo'lsin!"
         )
         scene_plan = (
-            "UZUN 44 SONIYALIK YANGILIK REEL (6-7 ta sahna: `media_card` -> `news_radar` -> `broll_card` -> `media_card` -> `hook_stat` -> oxirida `follow_outro` — rasm va videolarga maksimal boy!)"
+            "UZUN 44 SONIYALIK TOP VIRAL YANGILIK REEL (7 ta sahna: `media_card` -> `broll_card` -> `news_radar` -> `media_card` -> `broll_card` -> `hook_stat` -> oxirida `follow_outro` — AYNAN MAVZUGA MOS real HD rasmlar va jonli B-roll videolarga maksimal boy!)"
             if is_long
-            else "QISQA VIRAL YANGILIK REEL (4 ta sahna: `media_card` -> `news_radar` -> `broll_card` -> oxirida `follow_outro` — rasm va jonli B-roll videolarga boy!)"
+            else "TOPGA CHIQADIGAN VIRAL YANGILIK REEL (5 ta sahna: `media_card` -> `broll_card` -> `news_radar` -> `broll_card` -> oxirida `follow_outro` — har 3 soniyada aynan mavzuga 100% mos yangi HD rasm yoki jonli video kadr almashsin!)"
         )
     else:
         ending_rule = (
@@ -253,23 +409,23 @@ async def generate_dynamic_ai_blueprint(
             "bepul qo'llanma/shablonni olish uchun izohda maxfiy kalit so'zni yozishga chaqir."
         )
         scene_plan = (
-            "UZUN 44 SONIYALIK O'QUV REEL (6 ta sahna: `broll_card` yoki `media_card` + `vs_comparison` + `pipeline_dm` + `scorecard_bars` + `media_card` + oxirida `cta_terminal`)"
+            "UZUN 44 SONIYALIK O'QUV REEL (6 ta sahna: `media_card` -> `broll_card` -> `vs_comparison` -> `pipeline_dm` -> `media_card` -> oxirida `cta_terminal`)"
             if is_long
-            else "AMALIY O'QUV REEL (4 ta sahna: `media_card` yoki `broll_card` + `vs_comparison` yoki `pipeline_dm` + `scorecard_bars` yoki `code_architecture` + oxirida `cta_terminal`)"
+            else "AMALIY O'QUV REEL (5 ta sahna: `media_card` -> `broll_card` -> `pipeline_dm` yoki `vs_comparison` -> `scorecard_bars` -> oxirida `cta_terminal` — mavzuga aynan mos rasm va jonli videolarga boy!)"
         )
 
     sys_p = (
         "Sen @diyor.ctr Instagram sahifasining bosh kreativ ssenaristi va motion-rejissyorisan. "
-        "Vazifang — berilgan MAVZU va YO'NALISH bo'yicha 100% ORIGINAL, TAKRORLANMAS, Fakt, HD Rasm va B-Roll videolarga boy JSON blueprint yaratish!\n"
+        "Vazifang — berilgan MAVZU va YO'NALISH bo'yicha INSTAGRAM TOP (EXPLORE) ga chiqadigan, 100% ORIGINAL, AYNAN MAVZUGA MOS HD Rasm va B-Roll videolarga boy JSON blueprint yaratish!\n"
         "QAT'IY QOIDALAR:\n"
         "1. QAT'IY TAQIQ: Hech qachon '10 kishilik jamoa emas', 'Eski usulda vaqt yo'qotmang', '48 soatda tayyor mahsulot', 'AI IMPERIYA' kabi shablon jumlalarni ISHLATMA!\n"
-        "2. Har bir video MAVZUGA 100% MOS, tirik, ravon O'zbek tilida (lotin yozuvida) bo'lsin.\n"
+        "2. Har bir video MAVZUGA 100% MOS, sof, tabiiy Toshkent adabiy O'zbek tilida (lotin yozuvida, chet so'zlarsiz va tarjima g'alizliklarisiz) bo'lsin. Birinchi gapdanoq tomoshabinni ushlab qoladigan kuchli fakt yoki savol bilan boshla!\n"
         "3. `headlineHtml` ichida Fraunces shrifti chiroyli turishi uchun qatorni mantiqiy joydan `<br>` bilan bo'l va eng kuchli 1-2 so'zni `<em>...</em>` ichiga ol.\n"
         f"4. {ending_rule}\n"
-        "5. Har bir `media_card` va `broll_card` sahnasi uchun BIR-BIRIDAN FARQLI, aniq inglizcha qidiruv so'rovlarini (`imageQuery` / `brollQuery`) yoz!\n"
+        "5. O'TA MUHIM (AYNAN MAVZUGA MOS MEDIA!): `hookImageQuery`, `hookBrollQuery`, hamda har bir `media_card` (`imageQuery`) va `broll_card` (`brollQuery`) uchun UMUMIY 'office laptop' kabi so'zlarni EMAS, balki AYNAN MAVZUDAGI kompaniya, shaxs, qurilma yoki jarayonning aniq inglizcha nomini yoz (masalan: `'Tesla Optimus humanoid robot walking factory'`, `'Apple iPhone 17 Pro AI chip closeup'`, `'Sam Altman OpenAI semiconductor wafer'`, `'Nvidia Blackwell GPU server rack'`, `'Pavel Durov Telegram smartphone app'`). Har bir sahnadagi qidiruv so'rovi BIR-BIRIDAN FARQLI rakursda bo'lsin!\n"
         "6. Sahna turlari:\n"
-        "   - `media_card`: `{\"type\":\"media_card\",\"eyebrow\":\"VIZUAL DALIL · FAKTLAR\",\"headlineHtml\":\"...\",\"captionText\":\"1 qator qisqa o'zbekcha izoh\",\"imageQuery\":\"specific English photo search query (3-5 words)\"}`\n"
-        "   - `broll_card`: `{\"type\":\"broll_card\",\"eyebrow\":\"JONLI LAVHA · B-ROLL\",\"headlineHtml\":\"...\",\"captionText\":\"1 qator qisqa o'zbekcha izoh\",\"brollQuery\":\"2-3 concrete English stock video words, e.g. 'robot laboratory', 'microchip factory', 'coding developer', 'smartphone app'\"}`\n"
+        "   - `media_card`: `{\"type\":\"media_card\",\"eyebrow\":\"VIZUAL DALIL · FAKTLAR\",\"headlineHtml\":\"...\",\"captionText\":\"1 qator qisqa o'zbekcha izoh\",\"imageQuery\":\"exact specific English press/product photo search query (4-6 words)\"}`\n"
+        "   - `broll_card`: `{\"type\":\"broll_card\",\"eyebrow\":\"JONLI LAVHA · B-ROLL\",\"headlineHtml\":\"...\",\"captionText\":\"1 qator qisqa o'zbekcha izoh\",\"brollQuery\":\"exact specific English video/press query (3-5 words, include brand/product + visual subject)\"}`\n"
         "   - `news_radar`: `{\"type\":\"news_radar\",\"eyebrow\":\"ASOSIY FAKTLAR · RADAR\",\"headlineHtml\":\"...\",\"items\":[{\"badge\":\"FAKT · 01\",\"title\":\"...\",\"source\":\"...\"}, ...3 ta]}`\n"
         "   - `vs_comparison`: `{\"type\":\"vs_comparison\",\"eyebrow\":\"TAQQOSLASH\",\"headlineHtml\":\"...\",\"oldTitle\":\"...\",\"oldPoints\":[\"...\",\"...\"],\"newTitle\":\"...\",\"newPoints\":[\"...\",\"...\"]}`\n"
         "   - `hook_stat`: `{\"type\":\"hook_stat\",\"eyebrow\":\"RAQAMLARDA\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"statLabel\":\"...\",\"statValue\":87,\"statSuffix\":\"%\",\"barPercent\":87}`\n"
@@ -278,7 +434,8 @@ async def generate_dynamic_ai_blueprint(
         "   - `code_architecture`: `{\"type\":\"code_architecture\",\"eyebrow\":\"TEXNIK YECHIM\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"fileName\":\"agent.py\",\"badge\":\"AI\",\"codeLines\":[\"...\", ...4-5 qator]}`\n"
         "   - `cta_terminal` (faqat 1-yo'nalish O'rganish videolari oxirida): `{\"type\":\"cta_terminal\",\"eyebrow\":\"BEPUL QO'LLANMA · DIRECT\",\"headlineHtml\":\"Izohda <em>«KALIT»</em><br>deb yozing\",\"subtext\":\"...\",\"keyword\":\"KALIT\"}`\n"
         "   - `follow_outro` (faqat 2-yo'nalish Yangilik videolari oxirida — Gate'siz!): `{\"type\":\"follow_outro\",\"eyebrow\":\"KUNLIK YANGILIKLAR · @DIYOR.CTR\",\"headlineHtml\":\"Shunday videolarni<br><em>o‘tkazib yubormang</em>\",\"subtext\":\"Obuna bo‘lib qo‘ysangiz, har kuni shunday eng muhim yangilik va tahlillarni joylab boramiz!\"}`\n"
-        "7. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
+        "7. INGLIZCHA BREND VA ATAMALAR QOIDASI: `display_words_text` ichida mashhur brend va texnologik nomlarni (Apple, iPhone, Bloomberg, The Verge, OpenAI, ChatGPT, Claude, Tesla Optimus, Boston Dynamics) asl inglizcha imlosida yozing va ularga (-ning, -da, -ni, -ga) qo'shimchasini bevosita yopishtirmang (masalan: `Apple'ning` o'rniga `Apple kompaniyasining`, `iPhone'da` o'rniga `iPhone modelida`, `Claude'ni` o'rniga `Claude tizimini` deb yozing) — shunda ikki tilli studiya diktori har bir inglizcha so'zni 100% sof talaffuz qiladi!\n"
+        "8. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
     )
 
     usr_p = (
@@ -323,7 +480,13 @@ async def generate_dynamic_ai_blueprint(
             theme = "warm" if str(parsed.get("theme", "")).lower() == "warm" else "lotion"
 
         disp_txt = re.sub(r"\s+", " ", str(parsed["display_words_text"]).strip())
-        vo_script = normalize_uzbek_for_tts(disp_txt)
+        if mode == "news" and not any(w in disp_txt.lower() for w in ("obuna", "follov", "follow")):
+            if not disp_txt.endswith((".", "!", "?")):
+                disp_txt += "."
+            disp_txt += " Obuna bo'lib qo'ysangiz, har kuni shunday muhim yangiliklarni joylab boramiz!"
+        # Preserve original English brand orthography in `vo_script` so `uzbek_bilingual_hd` speaks
+        # English words natively (`ChristopherNeural`) while monolingual fallbacks normalize internally!
+        vo_script = disp_txt
         callouts = parsed.get("callouts") if isinstance(parsed.get("callouts"), list) and len(parsed["callouts"]) >= 2 else [
             {"label": "FAKT", "value": behind},
             {"label": "TAHLIL" if mode == "news" else "DIRECT", "value": "@diyor.ctr" if mode == "news" else f"«{kw}»"},
@@ -431,7 +594,7 @@ def build_autopilot_blueprint(
             f"Mutaxassislar jarayon kutilganidan uch barobar tez rivojlanayotganini tasdiqladi. "
             f"Obuna bo'lib qo'ysangiz, har kuni shunday eng muhim yangilik va tahlillarni joylab boramiz!"
         )
-        voice_script = normalize_uzbek_for_tts(display_words_text)
+        voice_script = display_words_text
         scenes = [
             {
                 "type": "media_card",
@@ -463,7 +626,7 @@ def build_autopilot_blueprint(
             f"Ikkinchi qadam: sun'iy intellekt yordamida takroriy ishlarni avtomatlashtiring. "
             f"To'liq bepul qo'llanmani olish uchun obuna bo'ling va izohda «{kw}» deb yozing!"
         )
-        voice_script = normalize_uzbek_for_tts(display_words_text)
+        voice_script = display_words_text
         scenes = [
             {
                 "type": "media_card",
@@ -749,19 +912,39 @@ def render_karaoke_overlay_onto_mp4(
 
 
 def _infer_english_visual_queries(topic: str) -> tuple[str, str]:
-    """Maps Uzbek/mixed topic text to clean English `(image_query, broll_query)` fallbacks."""
+    """Maps Uzbek/mixed topic text to hyper-specific English `(image_query, broll_query)` preserving brand/person names."""
     lo = (topic or "").lower()
+    # Preserve exact proper brands/entities mentioned in the topic!
+    entities: list[str] = []
+    entity_map = [
+        ("tesla", "Tesla"), ("optimus", "Optimus humanoid robot"), ("elon", "Elon Musk"), ("musk", "Elon Musk"),
+        ("apple", "Apple"), ("iphone", "iPhone Pro"), ("siri", "Apple Siri AI"), ("openai", "OpenAI Sam Altman"),
+        ("chatgpt", "ChatGPT OpenAI"), ("claude", "Anthropic Claude AI"), ("gemini", "Google Gemini AI"),
+        ("google", "Google"), ("nvidia", "Nvidia AI GPU chip"), ("deepseek", "DeepSeek AI"),
+        ("telegram", "Telegram Pavel Durov"), ("durov", "Pavel Durov Telegram"), ("instagram", "Instagram Reels"),
+        ("meta", "Meta Mark Zuckerberg"), ("tiktok", "TikTok app"), ("bitcoin", "Bitcoin crypto"),
+        ("samsung", "Samsung Galaxy"), ("xiaomi", "Xiaomi smartphone"), ("byd", "BYD electric car"),
+    ]
+    for trig, en_lbl in entity_map:
+        if trig in lo and en_lbl not in entities:
+            entities.append(en_lbl)
+
+    ent_prefix = " ".join(entities[:2]).strip()
     if any(k in lo for k in ("robot", "optimus", "figure", "gumanoid")):
-        return ("humanoid robot artificial intelligence", "robot technology")
-    if any(k in lo for k in ("insta", "reels", "smm", "obuna", "kontent", "blog")):
-        return ("smartphone social media creator studio", "smartphone typing")
+        base_i = f"{ent_prefix} humanoid robot factory 2026".strip()
+        base_v = f"{ent_prefix} humanoid robot".strip()
+        return (base_i, base_v)
+    if any(k in lo for k in ("chip", "protsessor", "gpu", "yarimo'tkazgich", "nvidia")):
+        return (f"{ent_prefix} AI microchip semiconductor wafer".strip(), f"{ent_prefix} microchip processor".strip())
+    if any(k in lo for k in ("telefon", "smartfon", "iphone", "galaxy", "ilova", "messenjer", "telegram", "insta")):
+        return (f"{ent_prefix} smartphone technology press photo".strip(), f"{ent_prefix} smartphone screen".strip())
     if any(k in lo for k in ("kod", "python", "dastur", "vibe", "claude", "gpt", "agent", "bot")):
-        return ("software developer artificial intelligence code", "coding laptop")
-    if any(k in lo for k in ("sotuv", "biznes", "pul", "daromad", "mijoz", "voronka", "crm")):
-        return ("modern business analytics growth strategy", "business chart")
-    if any(k in lo for k in ("kripto", "aksiya", "bozor", "invest", "treyd")):
-        return ("financial stock market trading screen", "stock market")
-    return ("artificial intelligence technology innovation", "futuristic technology")
+        return (f"{ent_prefix} AI software developer screen".strip(), f"{ent_prefix} software developer coding".strip())
+    if any(k in lo for k in ("sotuv", "biznes", "pul", "daromad", "mijoz", "voronka", "crm", "trillion", "milliard")):
+        return (f"{ent_prefix} global tech business headquarters".strip(), f"{ent_prefix} financial stock market".strip())
+    if ent_prefix:
+        return (f"{ent_prefix} official press photo 2026", f"{ent_prefix} technology")
+    return ("artificial intelligence hardware innovation press photo", "microchip processor")
 
 
 def _extract_first_frame_data_url(mp4_path: str) -> str:
@@ -784,51 +967,84 @@ async def hydrate_topic_media_scenes(
     scenes_list: list[dict[str, Any]],
     topic: str,
     avoid_urls: set[str] | None = None,
+    video_mode: str = "news",
 ) -> list[dict[str, Any]]:
     """
-    Ensures every Reel contains real topic-matched visual cards (`media_card` / `broll_card`)
-    and downloads HD images & 30fps B-roll MP4s with zero duplicate clips (`avoid_urls`).
+    Packs high-density, 100% topic-specific HD photos & B-roll videos across the Reel (`used_urls`-deduplicated!).
+    In `news` mode ensures at least 3 visual cards (`media_card` / `broll_card`); in `edu` mode at least 2!
+    Alternates `broll_card` slots between real moving camera B-roll and 3-Shot Cinema Press Documentary Montage
+    so viewers see BOTH live motion AND exact real-world photos of the brand/person/device!
     """
     if not scenes_list:
         return scenes_list
     used_urls = avoid_urls if avoid_urls is not None else set()
     fb_img_q, fb_vid_q = _infer_english_visual_queries(topic)
     out_scenes = [dict(s) for s in scenes_list]
+    short_head = re.sub(r"\s+", " ", topic).strip()[:36]
 
-    has_visual = any(s.get("type") in ("media_card", "broll_card") for s in out_scenes)
-    if not has_visual and len(out_scenes) >= 2:
-        short_head = re.sub(r"\s+", " ", topic).strip()[:34]
-        out_scenes.insert(
-            1,
-            {
-                "type": "broll_card",
-                "eyebrow": "JONLI LAVHA · B-ROLL",
-                "headlineHtml": "Jarayon <em>jonli</em><br>kadrda",
-                "captionText": f"{short_head} — real jarayon",
-                "brollQuery": fb_vid_q,
-            },
-        )
+    visual_count = sum(1 for s in out_scenes if s.get("type") in ("media_card", "broll_card"))
+    min_visuals = 3 if video_mode == "news" else 2
 
-    # Hydrate sequentially over B-roll slots so `used_urls` guarantees distinct video clips!
+    if visual_count < min_visuals and len(out_scenes) >= 1:
+        # Inject exact topic visual scenes before the final CTA/Outro so every Reel is visually rich!
+        insert_pos = max(0, len(out_scenes) - 1)
+        if visual_count == 0:
+            out_scenes.insert(
+                0,
+                {
+                    "type": "media_card",
+                    "eyebrow": "REAL KADR · FAKTLAR",
+                    "headlineHtml": f"{short_head[:20]}<br><em>asosiy dalil</em>",
+                    "captionText": f"{short_head} — real fotolavha",
+                    "imageQuery": fb_img_q,
+                },
+            )
+            visual_count += 1
+            insert_pos = max(1, len(out_scenes) - 1)
+        while visual_count < min_visuals:
+            angle_sfx = "closeup hardware" if visual_count % 2 == 1 else "keynote showcase"
+            out_scenes.insert(
+                insert_pos,
+                {
+                    "type": "broll_card",
+                    "eyebrow": "JONLI LAVHA · HD",
+                    "headlineHtml": "Jarayon <em>real</em><br>kadrlar ichida",
+                    "captionText": f"{short_head} — amaliy ko‘rinish",
+                    "brollQuery": f"{fb_vid_q} {angle_sfx}".strip(),
+                },
+            )
+            visual_count += 1
+            insert_pos = min(len(out_scenes) - 1, insert_pos + 1)
+
+    # Hydrate sequentially with shared `used_urls` so every photo & video clip in the Reel is 100% unique!
     hydrated: list[dict[str, Any]] = []
+    broll_slot_idx = 0
+    img_slot_idx = 0
+    angle_variants = ["", "press photo", "technology closeup", "event stage"]
+
     for sc in out_scenes:
         st = sc.get("type")
         if st == "media_card" and not sc.get("imageDataUrl"):
-            iq = str(sc.get("imageQuery") or fb_img_q).strip()
-            res = await fetch_topic_editorial_image(iq)
+            iq_base = str(sc.get("imageQuery") or fb_img_q).strip()
+            iq = f"{iq_base} {angle_variants[img_slot_idx % len(angle_variants)]}".strip()
+            img_slot_idx += 1
+            res = await fetch_topic_editorial_image(iq, avoid_urls=used_urls)
             if res and res.get("data_url"):
                 sc["imageDataUrl"] = res["data_url"]
                 sc["sourceLabel"] = str(res.get("source") or "VIZUAL FAKTLAR · HD").upper()
         elif st == "broll_card" and not sc.get("videoPath"):
             vq = str(sc.get("brollQuery") or fb_vid_q).strip()
-            vres = await fetch_topic_broll_video(vq, avoid_urls=used_urls)
+            # Alternate: 1st broll_card -> real camera motion clip; 2nd broll_card -> 3-Shot Exact Press Cinema Montage!
+            prefer_montage = (broll_slot_idx % 2 == 1)
+            broll_slot_idx += 1
+            vres = await fetch_topic_broll_video(vq, avoid_urls=used_urls, prefer_press_montage=prefer_montage)
             if vres and vres.get("path") and Path(vres["path"]).exists():
                 sc["videoPath"] = vres["path"]
                 sc["sourceLabel"] = str(vres.get("source") or "B-ROLL · HD").upper()
                 sc["posterDataUrl"] = await asyncio.to_thread(_extract_first_frame_data_url, vres["path"])
             else:
                 iq = str(sc.get("imageQuery") or vq or fb_img_q).strip()
-                ires = await fetch_topic_editorial_image(iq)
+                ires = await fetch_topic_editorial_image(iq, avoid_urls=used_urls)
                 if ires and ires.get("data_url"):
                     sc["type"] = "media_card"
                     sc["imageDataUrl"] = ires["data_url"]
@@ -841,7 +1057,7 @@ async def run_one_click_autopilot(
     topic: str,
     keyword: str = "",
     out_dir: Path | None = None,
-    voice_profile: str = "modal_bariton_hd",
+    voice_profile: str = "uzbek_bilingual_hd",
     with_subtitles: bool = True,
     photo_path: Path | None = None,
     target_duration: float = 15.0,
@@ -849,10 +1065,11 @@ async def run_one_click_autopilot(
     on_step=None,
 ) -> dict[str, Any]:
     """
-    End-to-end Dual-Track Autopilot Conveyor:
-      - Track 1 (`video_mode="edu"`): O'rganish / Qo'llanma -> DIYOR.CTR 3D Portrait Hook + step-by-step scenes + Follow-Gate `cta_terminal`
-      - Track 2 (`video_mode="news"`): Yangilik va Prosmotr -> Jonli HD B-Roll Hook + Boy HD Rasm & B-Roll sahnalar + Gate'siz `follow_outro`!
-      - Both tracks render with the new `Kinetic Pop` (`Montserrat-Variable`) borderless subtitles & `-14.5 LUFS` Kino Bariton HD!
+    End-to-end Dual-Track Autopilot Conveyor (`v6` Hyper-Visual + Bilingual Uzbek+English Male HD):
+      - Auto-resolves `topic="TOP"` / `"AUTO_TOP"` via live `fetch_viral_top_topics(limit=3)`!
+      - Track 1 (`video_mode="edu"`): O'rganish / Qo'llanma -> DIYOR.CTR 3D Portrait Hook + rich visuals + Follow-Gate `cta_terminal`
+      - Track 2 (`video_mode="news"`): Yangilik va Prosmotr -> Real-Topic HD B-Roll Hook + Dense Exact Photos & Videos + Gate'siz `follow_outro`!
+      - Default Voice: `uzbek_bilingual_hd` (`uz-UZ-SardorNeural` 115.9Hz + acoustic twin `en-US-ChristopherNeural` 115.5Hz — 100% crisp English & Uzbek, `-14.5 LUFS`)!
     """
     async def _emit(msg: str) -> None:
         if on_step is not None:
@@ -862,8 +1079,19 @@ async def run_one_click_autopilot(
                 pass
 
     t0 = time.time()
+    eff_topic = (topic or "").strip()
+    if eff_topic.upper() in ("TOP", "AUTO_TOP", "TREND", ""):
+        await _emit("🔥 <b>1.5-qadam:</b> Dunyo bo‘yicha TOPga chiqadigan eng qaynoq viral mavzu qidirilmoqda...")
+        top_list = await fetch_viral_top_topics(limit=3)
+        if top_list:
+            eff_topic = top_list[0]["uz_topic"]
+            if video_mode == "auto":
+                video_mode = top_list[0].get("mode", "news")
+        else:
+            eff_topic = "Tesla Optimus gumanoid robotlari fabrikalarda ish boshladi: 2026 real kadrlar"
+
     await _emit("🧠 <b>2-qadam:</b> Jonli internet faktlari va AI-rejissyor orqali ssenariy tuzilmoqda...")
-    bp = await generate_dynamic_ai_blueprint(topic, keyword, target_duration=target_duration, video_mode=video_mode)
+    bp = await generate_dynamic_ai_blueprint(eff_topic, keyword, target_duration=target_duration, video_mode=video_mode)
     mode = bp.get("video_mode", "edu")
     kw = bp["keyword"]
     is_long = bool(bp.get("is_long"))
@@ -874,14 +1102,14 @@ async def run_one_click_autopilot(
         out_dir = Path("/home/user/.cache/diyor_vault/media/custom_renders") / f"autopilot_{mode}_{kw.lower()}_{ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Synthesize Modal Cloud · Kino Bariton HD Voiceover
-    await _emit("🎙 <b>3-qadam:</b> Kino Bariton HD ovoz sintez qilinmoqda...")
+    # 1. Synthesize Bilingual Uzbek + English Male Studio Voiceover (`uzbek_bilingual_hd` default!)
+    await _emit("🎙 <b>3-qadam:</b> O‘zbek + Ingliz Bilingual HD (100% tiniq talaffuz) erkak ovozi sintez qilinmoqda...")
     vo_wav = out_dir / f"00_voice_{voice_profile}.wav"
     tts_meta = await synthesize_pro_uzbek_voice(bp["voice_script"], vo_wav, profile=voice_profile, speed=1.0)
     min_floor = max(float(target_duration or 14.0), 40.0) if is_long else max(float(target_duration or 13.0), 10.5)
     vo_dur = max(min_floor, float(tts_meta["duration"]) + 0.85)
 
-    # 2. Fetch Whisper timestamps + Hook/Cover + Rich Topic Media in parallel!
+    # 2. Fetch Whisper timestamps + Hook/Cover + Rich Deduplicated Topic Media!
     ffmpeg_bin = get_ffmpeg_bin()
     vo_16k = out_dir / "tmp_vo_16k.wav"
     subprocess.run(
@@ -892,18 +1120,30 @@ async def run_one_click_autopilot(
     cover_4x5_png = out_dir / f"01_KARUSEL_muqova_{kw.lower()}_4x5.png"
     hook_dur = 3.2 if is_long else 2.8
     rem_dur = max(36.8 if is_long else 7.5, round(vo_dur - hook_dur, 2))
-    used_broll_urls: set[str] = set()
+    used_media_urls: set[str] = set()
+
+    async def _fast_whisper_or_none(p_wav: Path):
+        if tts_meta.get("acoustic_words"):
+            return None
+        try:
+            return await asyncio.wait_for(transcribe_uzbek_via_modal(p_wav), timeout=10.0)
+        except Exception:
+            return None
 
     if mode == "news":
-        await _emit("🎞 <b>4-qadam:</b> Jonli HD B-Roll Yangilik Hooki va boy media kartochkalar yuklanmoqda...")
-        hook_broll_res = await fetch_topic_broll_video(bp.get("hookBrollQuery") or bp["topic"], avoid_urls=used_broll_urls)
-        hook_img_res = await fetch_topic_editorial_image(bp.get("hookImageQuery") or bp["topic"])
+        await _emit("🎞 <b>4-qadam:</b> Mavzuga 100% mos Real-Kadr Hook, HD fotolar va B-Roll videolar yig‘ilmoqda...")
+        hook_img_res = await fetch_topic_editorial_image(bp.get("hookImageQuery") or bp["topic"], avoid_urls=used_media_urls)
+        hook_broll_res = await fetch_topic_broll_video(
+            bp.get("hookBrollQuery") or bp["topic"],
+            avoid_urls=used_media_urls,
+            portrait_hook=True,
+        )
         hook_mp4_p = Path(hook_broll_res["path"]) if (hook_broll_res and hook_broll_res.get("path")) else None
         hook_img_du = (hook_img_res or {}).get("data_url", "")
 
-        whisper_task = asyncio.create_task(transcribe_uzbek_via_modal(vo_16k))
+        whisper_task = asyncio.create_task(_fast_whisper_or_none(vo_16k))
         media_task = asyncio.create_task(
-            hydrate_topic_media_scenes(bp.get("scenes") or [], bp["topic"], avoid_urls=used_broll_urls)
+            hydrate_topic_media_scenes(bp.get("scenes") or [], bp["topic"], avoid_urls=used_media_urls, video_mode=mode)
         )
         await render_news_cover_slide(hook_img_du, cover_4x5_png, bp["hook_config"])
         hook_frames = await render_news_broll_hook_frames(
@@ -911,20 +1151,16 @@ async def run_one_click_autopilot(
         )
         w_res, hydrated_scenes = await asyncio.gather(whisper_task, media_task)
     else:
-        await _emit("🖼 <b>4-qadam:</b> 4:5 DIYOR.CTR muqova va 3D portret hook chizilmoqda...")
-        whisper_task = asyncio.create_task(transcribe_uzbek_via_modal(vo_16k))
-        cover_task = asyncio.create_task(
-            render_brand_photo_slide(portrait, cover_4x5_png, config=bp["hook_config"], aspect="4:5")
-        )
-        hook_frames_task = asyncio.create_task(
-            render_brand_photo_parallax_frames(portrait, config=bp["hook_config"], aspect="9:16", duration=hook_dur, fps=30)
-        )
+        await _emit("🖼 <b>4-qadam:</b> 4:5 DIYOR.CTR muqova, 3D portret hook va mavzuga mos kadrlari chizilmoqda...")
+        whisper_task = asyncio.create_task(_fast_whisper_or_none(vo_16k))
         media_task = asyncio.create_task(
-            hydrate_topic_media_scenes(bp.get("scenes") or [], bp["topic"], avoid_urls=used_broll_urls)
+            hydrate_topic_media_scenes(bp.get("scenes") or [], bp["topic"], avoid_urls=used_media_urls, video_mode=mode)
         )
-        w_res, _, hook_frames, hydrated_scenes = await asyncio.gather(
-            whisper_task, cover_task, hook_frames_task, media_task
+        await render_brand_photo_slide(portrait, cover_4x5_png, config=bp["hook_config"], aspect="4:5")
+        hook_frames = await render_brand_photo_parallax_frames(
+            portrait, config=bp["hook_config"], aspect="9:16", duration=hook_dur, fps=30
         )
+        w_res, hydrated_scenes = await asyncio.gather(whisper_task, media_task)
     vo_16k.unlink(missing_ok=True)
     if hydrated_scenes:
         bp["scenes"] = hydrated_scenes
@@ -973,8 +1209,8 @@ async def run_one_click_autopilot(
         prepend_rgb_frames=hook_frames,
     )
 
-    # 4. Mux Modal Kino Bariton HD + Ducked FX Bed (-14.5 LUFS)
-    await _emit("🔤 <b>6-qadam:</b> -14.5 LUFS ovoz va yangi Kinetic Pop subtitrlar yozilmoqda...")
+    # 4. Mux Toshkent Diktor HD Voice + Ducked FX Bed (-14.5 LUFS)
+    await _emit("🔤 <b>6-qadam:</b> -14.5 LUFS sof o‘zbek ovozi va Kinetic Pop subtitrlar yozilmoqda...")
     voiced_mp4 = out_dir / f"tmp_voiced_{kw.lower()}.mp4"
     await asyncio.to_thread(
         mux_navoiy_voice_onto_mp4,
@@ -986,9 +1222,9 @@ async def run_one_click_autopilot(
     )
     raw_mp4.unlink(missing_ok=True)
 
-    # 5. Burn New Kinetic Pop Subtitles into lower safe zone (`y=1642`)!
+    # 5. Burn Kinetic Pop Subtitles into lower safe zone (`y=1642`) using Whisper OR Silero sentence-exact acoustic words!
     final_reel_mp4 = out_dir / f"02_REELS_{mode}_{kw.lower()}_diyor_ctr_9x16.mp4"
-    whisper_words = (w_res or {}).get("words", [])
+    whisper_words = (w_res or {}).get("words") or tts_meta.get("acoustic_words") or []
     aligned_words = align_clean_uzbek_words(bp["display_words_text"], whisper_words, float(tts_meta["duration"]))
 
     if with_subtitles:
