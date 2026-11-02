@@ -12,9 +12,13 @@ on:
         required: false
         default: ""
       duration_sec:
-        description: "Video davomiyligi (10 = qisqa, 44 = to'liq 7-sahnali)"
+        description: "Video davomiyligi (15 = qisqa, 44 = to'liq 7-sahnali)"
         required: true
-        default: "44"
+        default: "17"
+      video_mode:
+        description: "Yo'nalish: auto | edu (1-O'rganish + Gate) | news (2-Yangilik va Prosmotr, Gate'siz)"
+        required: false
+        default: "auto"
       chat_id:
         description: "Telegram Chat ID"
         required: true
@@ -69,6 +73,7 @@ jobs:
           RENDER_TOPIC: ${{ github.event.inputs.topic }}
           RENDER_KEYWORD: ${{ github.event.inputs.keyword }}
           RENDER_DURATION: ${{ github.event.inputs.duration_sec }}
+          RENDER_MODE: ${{ github.event.inputs.video_mode }}
           RENDER_CHAT_ID: ${{ github.event.inputs.chat_id }}
         run: |
           python3 - <<'PY'
@@ -78,38 +83,41 @@ jobs:
           from autopilot_conveyor import run_one_click_autopilot
 
           async def main():
-          out_d = Path("/home/user/.cache/diyor_vault/gh_out")
-          res = await run_one_click_autopilot(
-              topic=os.environ.get("RENDER_TOPIC", "2026 yilgi eng muhim AI yangiliklari"),
-              keyword=os.environ.get("RENDER_KEYWORD", ""),
-              out_dir=out_d,
+              out_d = Path("/home/user/.cache/diyor_vault/gh_out")
+              res = await run_one_click_autopilot(
+                  topic=os.environ.get("RENDER_TOPIC", "2026 yilgi eng muhim AI yangiliklari"),
+                  keyword=os.environ.get("RENDER_KEYWORD", ""),
+                  out_dir=out_d,
                   voice_profile="modal_bariton_hd",
                   with_subtitles=True,
-                  target_duration=float(os.environ.get("RENDER_DURATION", "44")),
+                  target_duration=float(os.environ.get("RENDER_DURATION", "17")),
+                  video_mode=os.environ.get("RENDER_MODE", "auto"),
               )
               tok = (os.environ.get("TG_BOT_TOKEN") or "").strip()
               if not tok:
                   raise RuntimeError("TG_BOT_TOKEN secret topilmadi!")
               cid = os.environ.get("RENDER_CHAT_ID", "7179261501")
+              v_mode = res.get("video_mode", "edu")
+              mode_lbl = "📢 Yangilik & Prosmotr (Gate'siz)" if v_mode == "news" else f"🎓 O'rganish & Gate («{res['keyword']}»)"
               subprocess.run([
                   "curl", "-f", "-sS", "-F", f"chat_id={cid}",
                   "-F", f"document=@{res['cover_png']}",
-                  "-F", f"caption=🖼 [Arenasiz 24/7 GitHub Cloud] 4:5 DIYOR.CTR Muqova ({res['topic']})",
+                  "-F", f"caption=🖼 [Arenasiz 24/7 Cloud] 4:5 Muqova · {mode_lbl}",
                   f"https://api.telegram.org/bot{tok}/sendDocument"
               ], check=True)
               subprocess.run([
                   "curl", "-f", "-sS", "-F", f"chat_id={cid}", "-F", "supports_streaming=true",
                   "-F", f"video=@{res['reel_mp4']}",
-                  "-F", f"caption=🎬 [Arenasiz 24/7 GitHub Cloud] 9:16 Reel · {res['duration']}s ({res['keyword']})",
+                  "-F", f"caption=🎬 [Arenasiz 24/7 Cloud] 9:16 Reel · {res['duration']}s · {mode_lbl}",
                   f"https://api.telegram.org/bot{tok}/sendVideo"
               ], check=True)
               subprocess.run([
                   "curl", "-f", "-sS", "-X", "POST",
                   f"https://api.telegram.org/bot{tok}/sendMessage",
                   "-d", f"chat_id={cid}",
-                  "--data-urlencode", f"text=📋 Tayyor Instagram Caption (Arenasiz 24/7 Cloud):\n\n{res['caption']}",
+                  "--data-urlencode", f"text=📋 Tayyor Instagram Caption ({mode_lbl}):\n\n{res['caption']}",
               ], check=True)
-              print("ALL DELIVERED TO TELEGRAM:", res["duration"], "sec")
+              print("ALL DELIVERED TO TELEGRAM:", res["duration"], "sec", v_mode)
 
           asyncio.run(main())
           PY
