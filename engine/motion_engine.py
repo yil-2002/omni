@@ -636,6 +636,64 @@ def build_diyor_motion_html(spec: dict[str, Any]) -> tuple[str, list[float], flo
               tl.fromTo("#{sid} .b-frame", {{ y: 18, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.22, ease: "power3.out" }}, {t0 + 0.02});
             """)
 
+        elif stype == "follow_outro":
+            av_url = sc.get("avatarDataUrl") or ""
+            if not av_url:
+                p_av = Path("/home/user/uploads/IMG_2860.jpeg")
+                if p_av.exists():
+                    try:
+                        av_im = Image.open(p_av).convert("RGB")
+                        # Center-top face crop
+                        sz = min(av_im.width, av_im.height)
+                        av_crop = av_im.crop(((av_im.width - sz) // 2, 0, (av_im.width + sz) // 2, sz)).resize((180, 180), Image.Resampling.LANCZOS)
+                        buf_av = io.BytesIO()
+                        av_crop.save(buf_av, format="JPEG", quality=88)
+                        av_url = "data:image/jpeg;base64," + base64.b64encode(buf_av.getvalue()).decode("ascii")
+                    except Exception:
+                        av_url = ""
+            av_html = (
+                f'<img src="{av_url}" style="width:92px; height:92px; border-radius:50%; object-fit:cover; border:3px solid var(--accent); flex-shrink:0;" />'
+                if av_url
+                else '<div style="width:92px; height:92px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:32px; flex-shrink:0;">D</div>'
+            )
+            note_txt = sc.get("subtext") or "Obuna bo‘lib qo‘ysangiz, har kuni shunday eng muhim yangilik va vizual tahlillarni joylab boramiz!"
+            left_h = f"""
+              <div class="eyebrow"><span class="dot"></span>{sc.get("eyebrow", "KUNLIK YANGILIKLAR · @DIYOR.CTR")}</div>
+              <h2 class="h-serif s-hd">{sc.get("headlineHtml", "Shunday videolarni<br><em>o‘tkazib yubormang</em>")}</h2>
+              <p class="sub-p s-sub" style="max-width:760px;">{note_txt}</p>
+            """
+            right_h = f"""
+              <div class="card f-card" style="margin-top:26px; padding:28px 32px; border-radius:28px; background:var(--surface); border:2px solid var(--border); box-shadow:0 22px 48px rgba(20,20,19,0.09);">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:20px;">
+                  <div style="display:flex; align-items:center; gap:18px;">
+                    {av_html}
+                    <div>
+                      <div style="font-size:28px; font-weight:800; color:var(--ink); letter-spacing:-0.02em;">@diyor.ctr</div>
+                      <div style="font-size:17px; color:var(--muted); margin-top:4px;">AI · Texnologiya · Kunlik tahlil</div>
+                    </div>
+                  </div>
+                  <div id="{sid}_fbtn" style="position:relative; background:var(--accent); color:#faf9f5; font-size:20px; font-weight:800; padding:14px 28px; border-radius:999px; white-space:nowrap; box-shadow:0 10px 24px rgba(217,119,87,0.30);">
+                    <span id="{sid}_fp">+ Obuna bo‘lish</span>
+                    <span id="{sid}_fd" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; opacity:0;">✓ Obuna bo‘ldingiz</span>
+                  </div>
+                </div>
+                <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border); display:flex; gap:12px; flex-wrap:wrap; font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--muted); letter-spacing:0.10em;">
+                  <span>✓ FAKTLAR VA KADRLAR</span><span>·</span><span>✓ REKLAMASIZ TAHLIL</span><span>·</span><span>✓ HAR KUNI</span>
+                </div>
+              </div>
+            """
+            scene_html_blocks.append(_wrap_scene_layout(aspect, sid, left_h, right_h))
+            click_t = round(t0 + min(1.05, max(0.55, dur * 0.36)), 3)
+            js_blocks.append(f"""
+              tl.fromTo("#{sid} .s-hd", {{ y: 24, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.34, ease: "power3.out" }}, {t0 + 0.04});
+              tl.fromTo("#{sid} .s-sub", {{ y: 18, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.34, ease: "power3.out" }}, {t0 + 0.14});
+              tl.fromTo("#{sid} .f-card", {{ y: 24, opacity: 0, scale: 0.96 }}, {{ y: 0, opacity: 1, scale: 1.0, duration: 0.38, ease: "power3.out" }}, {t0 + 0.22});
+              tl.fromTo("#{sid}_fbtn", {{ scale: 1.0, backgroundColor: "#d97757" }}, {{ scale: 0.92, duration: 0.11, ease: "power2.in" }}, {click_t});
+              tl.to("#{sid}_fp", {{ opacity: 0, duration: 0.08 }}, {round(click_t + 0.09, 3)});
+              tl.to("#{sid}_fd", {{ opacity: 1, duration: 0.12 }}, {round(click_t + 0.10, 3)});
+              tl.to("#{sid}_fbtn", {{ scale: 1.0, backgroundColor: "#2e6b52", boxShadow: "0 10px 24px rgba(46,107,82,0.28)", duration: 0.24, ease: "back.out(2.2)" }}, {round(click_t + 0.11, 3)});
+            """)
+
         else:  # cta_terminal
             kw = sc.get("keyword", "SKILL")
             term_w = "100%" if is_wide else ("84%" if is_compact else "74%")
