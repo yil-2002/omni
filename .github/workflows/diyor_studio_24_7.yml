@@ -1,0 +1,143 @@
+name: Diyor CTR 24/7 Serverless Reels & Brand Studio ($0.00 Runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Video va karusel mavzusi"
+        required: true
+        default: "Bir kishilik AI-Imperiya (Vibe Coding + Claude Skills)"
+      keyword:
+        description: "Follow-Gate Direct kalit so'zi"
+        required: true
+        default: "SKILL"
+      duration_sec:
+        description: "Video davomiyligi (10 = qisqa, 44 = to'liq 7-sahnali)"
+        required: true
+        default: "44"
+      chat_id:
+        description: "Telegram Chat ID"
+        required: true
+        default: "7179261501"
+
+jobs:
+  render_and_deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Repozitoriyni yuklash
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 tayyorlash
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sistemali kutubxonalar, /home/user muhiti va Playwright Chromium
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg rubberband-cli libsndfile1 fonts-dejavu-core
+          pip install --upgrade pip
+          pip install playwright pillow opencv-python-headless numpy scipy rembg onnxruntime edge-tts pedalboard soundfile imageio-ffmpeg aiohttp
+          playwright install --with-deps chromium
+
+          sudo mkdir -p /home/user/.cache/diyor_vault/tmp /home/user/.cache/diyor_vault/matte_cache /home/user/.cache/u2net_models /home/user/uploads
+          sudo chown -R "$USER:$USER" /home/user
+          ln -sfn "$GITHUB_WORKSPACE" /home/user/claude-techbrief
+
+          if [ -f "$GITHUB_WORKSPACE/uploads/IMG_2860.jpeg" ]; then
+            cp -f "$GITHUB_WORKSPACE/uploads/IMG_2860.jpeg" /home/user/uploads/IMG_2860.jpeg
+          elif [ -f "$GITHUB_WORKSPACE/IMG_2860.jpeg" ]; then
+            cp -f "$GITHUB_WORKSPACE/IMG_2860.jpeg" /home/user/uploads/IMG_2860.jpeg
+          fi
+
+          # Ensure lightweight cloud_render_bridge & _fxbed fallbacks exist if first upload lacked them
+          mkdir -p "$GITHUB_WORKSPACE/engine" "$GITHUB_WORKSPACE/vositalar"
+          if [ ! -f "$GITHUB_WORKSPACE/engine/cloud_render_bridge.py" ]; then
+            cat << 'EOF' > "$GITHUB_WORKSPACE/engine/cloud_render_bridge.py"
+          from pathlib import Path
+          DIYOR_CLONE_WAV = Path("/home/user/.cache/diyor_vault/diyor_clone_ref_24k.wav")
+          def load_cloud_secrets():
+              return {"modal_voice_url": "https://yoqubovmuhammadiyor--diyor-ctr-voice-gpu.us-east.modal.run", "auto_modal_bariton": "1"}
+          def save_cloud_secrets(d): return d
+          async def post_modal_json(*a, **k): return None
+          async def transcribe_uzbek_via_modal(*a, **k): return {"words": []}
+          def call_modal_photo_cutout_sync(*a, **k): return None
+          async def try_modal_webhook_render(*a, **k): return None
+          def upload_to_cloudflare_r2(*a, **k): return None
+          EOF
+          fi
+          if [ ! -f "$GITHUB_WORKSPACE/vositalar/_fxbed.py" ]; then
+            cat << 'EOF' > "$GITHUB_WORKSPACE/vositalar/_fxbed.py"
+          import numpy as np, wave
+          SR = 48000
+          def build_fx_for_cuts(cuts, dur, out_wav):
+              n = max(1, int(float(dur) * SR))
+              y = np.zeros(n, dtype=np.float32)
+              rng = np.random.default_rng(2026)
+              for c in (cuts or []):
+                  idx = int(float(c) * SR)
+                  m = min(int(0.32 * SR), max(0, n - idx))
+                  if m > 64:
+                      tt = np.arange(m) / SR
+                      sweep = np.sin(2 * np.pi * np.cumsum(70 * np.exp(-tt * 8) + 36) / SR) * np.exp(-tt * 9) * 0.28
+                      whoosh = rng.normal(0, 0.05, m) * np.exp(-tt * 11)
+                      y[idx:idx+m] += (sweep + whoosh).astype(np.float32)
+              pcm = np.clip(y * 32767, -32768, 32767).astype("<i2")
+              stereo = np.column_stack([pcm, pcm]).ravel()
+              with wave.open(str(out_wav), "wb") as wf:
+                  wf.setnchannels(2); wf.setsampwidth(2); wf.setframerate(SR)
+                  wf.writeframes(stereo.tobytes())
+              return str(out_wav)
+          EOF
+          fi
+
+      - name: 9:16 Reels (1080x1920) + 4:5 Muqova Render va Telegram'ga Yuborish
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          RENDER_TOPIC: ${{ github.event.inputs.topic }}
+          RENDER_KEYWORD: ${{ github.event.inputs.keyword }}
+          RENDER_DURATION: ${{ github.event.inputs.duration_sec }}
+          RENDER_CHAT_ID: ${{ github.event.inputs.chat_id }}
+        run: |
+          python3 - <<'PY'
+          import asyncio, html, os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("/home/user/claude-techbrief/engine").resolve()))
+          from autopilot_conveyor import run_one_click_autopilot
+
+          async def main():
+              out_d = Path("/home/user/.cache/diyor_vault/gh_out")
+              res = await run_one_click_autopilot(
+                  topic=os.environ.get("RENDER_TOPIC", "Bir kishilik AI-Imperiya"),
+                  keyword=os.environ.get("RENDER_KEYWORD", "SKILL"),
+                  out_dir=out_d,
+                  voice_profile="modal_bariton_hd",
+                  with_subtitles=True,
+                  target_duration=float(os.environ.get("RENDER_DURATION", "44")),
+              )
+              tok = (os.environ.get("TG_BOT_TOKEN") or "").strip()
+              if not tok:
+                  raise RuntimeError("TG_BOT_TOKEN secret topilmadi! Repo Settings -> Secrets -> Actions -> TG_BOT_TOKEN ni tekshiring.")
+              cid = os.environ.get("RENDER_CHAT_ID", "7179261501")
+              subprocess.run([
+                  "curl", "-f", "-sS", "-F", f"chat_id={cid}",
+                  "-F", f"document=@{res['cover_png']}",
+                  "-F", f"caption=🖼 [Arenasiz 24/7 GitHub Cloud] 4:5 DIYOR.CTR Muqova ({res['topic']})",
+                  f"https://api.telegram.org/bot{tok}/sendDocument"
+              ], check=True)
+              subprocess.run([
+                  "curl", "-f", "-sS", "-F", f"chat_id={cid}", "-F", "supports_streaming=true",
+                  "-F", f"video=@{res['reel_mp4']}",
+                  "-F", f"caption=🎬 [Arenasiz 24/7 GitHub Cloud] 9:16 Reel · {res['duration']}s ({res['keyword']})",
+                  f"https://api.telegram.org/bot{tok}/sendVideo"
+              ], check=True)
+              subprocess.run([
+                  "curl", "-f", "-sS", "-X", "POST",
+                  f"https://api.telegram.org/bot{tok}/sendMessage",
+                  "-d", f"chat_id={cid}",
+                  "--data-urlencode", f"text=📋 Tayyor Instagram Caption (Arenasiz 24/7 Cloud):\n\n{res['caption']}",
+              ], check=True)
+
+          asyncio.run(main())
+          PY
