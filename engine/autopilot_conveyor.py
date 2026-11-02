@@ -34,6 +34,13 @@ from cloud_render_bridge import transcribe_uzbek_via_modal  # noqa: E402
 from motion_engine import VAULT_TMP, get_ffmpeg_bin, render_diyor_motion_mp4  # noqa: E402
 from photo_brand_engine import render_brand_photo_parallax_frames, render_brand_photo_slide  # noqa: E402
 from uzbek_male_voice_engine import mux_navoiy_voice_onto_mp4, synthesize_pro_uzbek_voice  # noqa: E402
+from uztts_normalize import normalize_uzbek_for_tts  # noqa: E402
+
+import html as _html
+import json
+import random
+import urllib.parse
+import aiohttp
 
 DEFAULT_PORTRAIT = Path("/home/user/uploads/IMG_2860.jpeg")
 BOLD_FONT_CANDIDATES = [
@@ -49,10 +56,250 @@ def _pick_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+async def _fetch_live_topic_facts(topic: str) -> str:
+    """Pulls live web facts & recent headlines from DuckDuckGo + HackerNews so every video has real fresh substance."""
+    q = urllib.parse.quote_plus(topic[:80])
+    snippets: list[str] = []
+    timeout = aiohttp.ClientTimeout(total=5.0)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            ddg_u = f"https://html.duckduckgo.com/html/?q={q}"
+            hn_u = f"https://hn.algolia.com/api/v1/search?query={q}&hitsPerPage=4"
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+            r_ddg, r_hn = await asyncio.gather(
+                sess.get(ddg_u, headers=headers),
+                sess.get(hn_u, headers=headers),
+                return_exceptions=True,
+            )
+            if not isinstance(r_ddg, Exception) and r_ddg.status == 200:
+                raw_h = await r_ddg.text()
+                titles = re.findall(r'class="result__a"[^>]*>(.*?)</a>', raw_h, flags=re.S)
+                descs = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>|class="result__snippet"[^>]*>(.*?)</div>', raw_h, flags=re.S)
+                for idx, t_raw in enumerate(titles[:4]):
+                    t_clean = _html.unescape(re.sub(r"<[^>]+>", "", t_raw)).strip()
+                    d_pair = descs[idx] if idx < len(descs) else ("", "")
+                    d_clean = _html.unescape(re.sub(r"<[^>]+>", "", d_pair[0] or d_pair[1])).strip()
+                    if t_clean:
+                        snippets.append(f"- {t_clean}: {d_clean[:160]}")
+            if not isinstance(r_hn, Exception) and r_hn.status == 200:
+                hn_d = await r_hn.json()
+                for h in (hn_d.get("hits") or [])[:3]:
+                    if h.get("title"):
+                        snippets.append(f"- [Tech] {h['title']} (points: {h.get('points', 0)})")
+    except Exception:
+        pass
+    return "\n".join(snippets[:6])
+
+
+async def _call_frontier_director_llm(system_prompt: str, user_prompt: str) -> str:
+    """Calls uncapped Frontier SSE stream (`reflection/beam-free` -> `stealth/glyph-cluster` -> `llm7`) to author bespoke JSON."""
+    msgs = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    timeout = aiohttp.ClientTimeout(total=28.0)
+    async with aiohttp.ClientSession(timeout=timeout) as sess:
+        for model in ("reflection/beam-free", "stealth/glyph-cluster"):
+            try:
+                async with sess.post(
+                    "https://api.kilo.ai/api/gateway/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                        "Authorization": "Bearer anonymous",
+                        "User-Agent": "Kilo-Code/4.2.0",
+                    },
+                    json={
+                        "model": model,
+                        "stream": True,
+                        "reasoning": {"effort": "low"},
+                        "temperature": 0.65,
+                        "max_tokens": 3000,
+                        "messages": msgs,
+                    },
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    out_parts: list[str] = []
+                    async for raw_line in resp.content:
+                        ln = raw_line.decode("utf-8", errors="ignore").strip()
+                        if not ln.startswith("data:"):
+                            continue
+                        ds = ln[5:].strip()
+                        if ds == "[DONE]":
+                            break
+                        try:
+                            ev = json.loads(ds)
+                            delta = (((ev.get("choices") or [{}])[0]).get("delta") or {}).get("content")
+                            if delta:
+                                out_parts.append(delta)
+                        except Exception:
+                            pass
+                    joined = "".join(out_parts).strip()
+                    if len(joined) >= 80 and "{" in joined:
+                        return joined
+            except Exception:
+                continue
+
+        # Fallback: api.llm7.io
+        try:
+            async with sess.post(
+                "https://api.llm7.io/v1/chat/completions",
+                headers={"Content-Type": "application/json", "Authorization": "Bearer unused"},
+                json={"model": "codestral-latest", "messages": msgs, "max_tokens": 2600, "temperature": 0.6},
+            ) as r7:
+                if r7.status == 200:
+                    d7 = await r7.json()
+                    txt = ((((d7.get("choices") or [{}])[0]).get("message") or {}).get("content") or "").strip()
+                    if "{" in txt:
+                        return txt
+        except Exception:
+            pass
+    return ""
+
+
+def _extract_json_dict(raw_txt: str) -> dict[str, Any] | None:
+    if not raw_txt:
+        return None
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_txt.strip(), flags=re.I | re.M)
+    i0 = cleaned.find("{")
+    i1 = cleaned.rfind("}")
+    if i0 < 0 or i1 <= i0:
+        return None
+    try:
+        obj = json.loads(cleaned[i0 : i1 + 1])
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+async def generate_dynamic_ai_blueprint(topic: str, keyword: str = "SKILL", target_duration: float = 12.0) -> dict[str, Any]:
+    """
+    TRUE BESPOKE AI REELS DIRECTOR:
+    Every single topic produces a 100% unique Uzbek script, fresh hook, custom callouts, rotating theme
+    (`lotion` vs `warm`), and topic-matched dynamic scene sequence from 7 scene archetypes!
+    """
+    clean_topic = re.sub(r"\s+", " ", (topic or "Sun'iy intellekt yangiliklari").strip())
+    raw_kw = re.sub(r"[^A-Za-z0-9_]", "", (keyword or "").upper())[:12]
+    dur_f = float(target_duration or 12.0)
+    is_long = dur_f >= 25.0
+
+    facts = await _fetch_live_topic_facts(clean_topic)
+    target_words = "88 dan 108 tagacha so'z (taxminan 42-46 soniya)" if is_long else "26 dan 36 tagacha so'z (taxminan 11-15 soniya)"
+    n_body_scenes = "5 yoki 6 ta" if is_long else "2 yoki 3 ta"
+
+    angles = [
+        "1) Yangilik va kutilmagan raqamlar radari (news_radar + hook_stat)",
+        "2) Ko'pchilik qiladigan eski xato vs Yangi aqlli yondashuv (vs_comparison + pipeline_dm)",
+        "3) Real amaliy mexanizm va natijalar tahlili (pipeline_dm + scorecard_bars)",
+        "4) Chuqur texnik yoki strategik sirlar ochilishi (hook_stat + vs_comparison + scorecard_bars)",
+    ]
+    chosen_angle = random.choice(angles)
+
+    sys_p = (
+        "Sen @diyor.ctr Instagram sahifasining bosh kreativ ssenaristi va motion-rejissyorisan. "
+        "Vazifang — berilgan MAVZU bo'yicha 100% ORIGINAL, TAKRORLANMAS, Fakt va Raqamlarga boy JSON blueprint yaratish!\n"
+        "QAT'IY QOIDALAR:\n"
+        "1. QAT'IY TAQIQ: Hech qachon '10 kishilik jamoa emas', 'Eski usulda vaqt yo'qotmang', '48 soatda tayyor mahsulot', 'AI IMPERIYA' kabi shablon jumlalarni ISHLATMA (faqat foydalanuvchi aynan shu so'zni so'ragandagina ruxsat)!\n"
+        "2. Har bir video MAVZUGA 100% MOS, tirik, ravon O'zbek tilida (lotin yozuvida) bo'lsin.\n"
+        "3. `headlineHtml` ichida Fraunces shrifti chiroyli turishi uchun qatorni mantiqiy joydan `<br>` bilan bo'l va eng kuchli 1-2 so'zni `<em>...</em>` ichiga ol.\n"
+        "4. Sahna turlari (`scenes` ro'yxati oxirida har doim `cta_terminal` bo'lsin, undan oldin mavzuga eng moslarini tanla va aralashtir):\n"
+        "   - `news_radar`: yangiliklar, 3 ta fakt, trendlar uchun -> `{\"type\":\"news_radar\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"items\":[{\"badge\":\"FAKT · 01\",\"title\":\"...\",\"source\":\"...\"}, ...3 ta]}`\n"
+        "   - `vs_comparison`: eski xato vs yangi yechim -> `{\"type\":\"vs_comparison\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"oldTitle\":\"...\",\"oldPoints\":[\"...\",\"...\"],\"newTitle\":\"...\",\"newPoints\":[\"...\",\"...\"]}`\n"
+        "   - `hook_stat`: kuchli statistika -> `{\"type\":\"hook_stat\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"statLabel\":\"...\",\"statValue\":87,\"statSuffix\":\"%\",\"barPercent\":87}`\n"
+        "   - `pipeline_dm`: 3 qadamli tizim/qo'llanma -> `{\"type\":\"pipeline_dm\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"steps\":[{\"tag\":\"01 · QADAM\",\"title\":\"...\",\"meta\":\"...\"}, ...3 ta]}`\n"
+        "   - `scorecard_bars`: ko'rsatkichlar tahlili -> `{\"type\":\"scorecard_bars\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"ringScore\":96,\"metrics\":[{\"label\":\"...\",\"val\":85,\"suffix\":\"%\",\"pct\":85}, ...3 ta]}`\n"
+        "   - `code_architecture`: FAQAT dasturlash, AI prompt, bot yoki texnik mavzu bo'lsa ishlat -> `{\"type\":\"code_architecture\",\"eyebrow\":\"...\",\"headlineHtml\":\"...\",\"subtext\":\"...\",\"fileName\":\"agent.py\",\"badge\":\"AI\",\"codeLines\":[\"...\", ...4-5 qator]}`\n"
+        "   - `cta_terminal` (eng oxirgi sahna): `{\"type\":\"cta_terminal\",\"eyebrow\":\"BEPUL QO'LLANMA · DIRECT\",\"headlineHtml\":\"Izohda <em>«KALIT»</em><br>deb yozing\",\"subtext\":\"...\",\"keyword\":\"KALIT\"}`\n"
+        "5. FAQAT TOZA JSON QAYTAR (hech qanday izohsiz!):"
+    )
+
+    usr_p = (
+        f"MAVZU: {clean_topic}\n"
+        f"DAVOMIYLIK REJIMI: {'UZUN 44 SONIYALIK (6 ta sahna: 5 ta asosiy sahna + oxirida 1 ta cta_terminal)' if is_long else 'QISQA DINAMIK REEL (3 ta sahna: 2 ta asosiy sahna + oxirida 1 ta cta_terminal)'}\n"
+        f"DIKTOR MATNI HAJMI (`display_words_text`): {target_words}\n"
+        f"TAVSIYA ETILGAN KREATIV BURCHAK: {chosen_angle}\n"
+        f"FOYDALANUVCHI KALIT SO'ZI: {raw_kw if (raw_kw and raw_kw != 'SKILL') else 'Mavzuga mos qisqa soz tanla (masalan NEWS, SOTUV, AGENT, TREND, KOD)'}\n"
+        + (f"\nINTERNETDAN TOPILGAN REAL FAKTLAR:\n{facts}\n" if facts else "")
+        + "\nQuyidagi JSON strukturasini to'liq to'ldirib qaytar:\n"
+        '{\n'
+        '  "theme": "lotion yoki warm",\n'
+        '  "keyword": "MAVZUGA_MOS_SOZ",\n'
+        '  "behindWord": "2 SOZ <=12 HARF",\n'
+        '  "kicker": "QISQA RUBRIKA",\n'
+        '  "hookHeadlineHtml": "Portret usti <em>kuchli sarlavha</em>",\n'
+        '  "hookSubtext": "1 gaplik aniq izoh",\n'
+        '  "callouts": [{"label": "FAKT", "value": "..."}, {"label": "NATIJA", "value": "..."}],\n'
+        '  "display_words_text": "Diktor o\'qiydigan to\'liq, ravon, qiziqarli O\'zbekcha matn (oxirida izohda kalit so\'zni yozishga chaqirsin)",\n'
+        f'  "scenes": [ ... {n_body_scenes} asosiy sahna va eng oxirida cta_terminal ... ],\n'
+        '  "caption": "Instagram post uchun to\'liq foydali matn va @diyor.ctr obuna + izoh CTA"\n'
+        '}'
+    )
+
+    raw_ai = await _call_frontier_director_llm(sys_p, usr_p)
+    parsed = _extract_json_dict(raw_ai)
+
+    if parsed and parsed.get("display_words_text") and isinstance(parsed.get("scenes"), list) and len(parsed["scenes"]) >= 2:
+        kw = re.sub(r"[^A-Za-z0-9_]", "", str((raw_kw if (raw_kw and raw_kw != "SKILL") else parsed.get("keyword")) or "TIZIM").upper())[:12] or "TIZIM"
+        behind = str(parsed.get("behindWord") or clean_topic.split()[0]).upper()[:13]
+        lo_t = clean_topic.lower()
+        if any(w in lo_t for w in ("yangilik", "kod", "python", "ai ", "model", "agent", "texno")):
+            theme = "lotion"
+        elif any(w in lo_t for w in ("sotuv", "biznes", "mijoz", "pul", "psixolog", "brend")):
+            theme = "warm"
+        else:
+            theme = "warm" if str(parsed.get("theme", "")).lower() == "warm" else "lotion"
+        disp_txt = re.sub(r"\s+", " ", str(parsed["display_words_text"]).strip())
+        vo_script = normalize_uzbek_for_tts(disp_txt)
+        callouts = parsed.get("callouts") if isinstance(parsed.get("callouts"), list) and len(parsed["callouts"]) >= 2 else [
+            {"label": "MAVZU", "value": behind},
+            {"label": "DIRECT", "value": f"«{kw}»"},
+        ]
+        scenes_list = []
+        for sc in parsed["scenes"][:7]:
+            if isinstance(sc, dict) and sc.get("type"):
+                if sc["type"] == "cta_terminal":
+                    sc["keyword"] = kw
+                scenes_list.append(sc)
+        if not any(s.get("type") == "cta_terminal" for s in scenes_list):
+            scenes_list.append({
+                "type": "cta_terminal",
+                "eyebrow": "BEPUL FOYDALI MATERIAL · DIRECT",
+                "headlineHtml": f"Izohda <em>«{kw}»</em><br>deb yozing",
+                "subtext": "@diyor.ctr sahifasiga obuna bo‘ling — 3 soniyada Direct’ga yuboriladi!",
+                "keyword": kw,
+            })
+        return {
+            "topic": clean_topic,
+            "keyword": kw,
+            "theme": theme,
+            "is_long": is_long,
+            "target_duration": dur_f,
+            "behindWord": behind,
+            "voice_script": vo_script,
+            "display_words_text": disp_txt,
+            "hook_config": {
+                "behindWord": behind,
+                "kicker": str(parsed.get("kicker") or f"TAHLIL · {kw}")[:32],
+                "headlineHtml": str(parsed.get("hookHeadlineHtml") or f"{clean_topic[:28]} <em>tahlili</em>"),
+                "subtext": str(parsed.get("hookSubtext") or f"@diyor.ctr · {clean_topic[:55]}"),
+                "callouts": callouts[:2],
+                "topicTag": f"{kw.lower()} · @diyor.ctr",
+                "handle": "@DIYOR.CTR",
+            },
+            "scenes": scenes_list,
+            "caption": str(parsed.get("caption") or f"🔥 {clean_topic}\n\nObuna bo‘ling (@diyor.ctr) va izohda «{kw}» deb yozing!"),
+        }
+
+    # Resilient offline fallback if external LLM is unreachable (still adapts scenes & theme!)
+    fb = build_autopilot_blueprint(clean_topic, raw_kw or "TIZIM", target_duration=dur_f)
+    return fb
+
+
 def build_autopilot_blueprint(topic: str, keyword: str = "SKILL", target_duration: float = 10.0) -> dict[str, Any]:
-    """Builds coherent Uzbek Hook, TechBrief Motion Scenes (short 10s OR full 40s+ 6-scene story), Voiceover Script, and Caption."""
-    clean_topic = re.sub(r"\s+", " ", (topic or "Bir kishilik AI-Imperiya").strip())
-    kw = re.sub(r"[^A-Za-z0-9_]", "", (keyword or "SKILL").upper())[:14] or "SKILL"
+    """Offline deterministic fallback blueprint if network LLM is unreachable."""
+    clean_topic = re.sub(r"\s+", " ", (topic or "Sun'iy intellekt tahlili").strip())
+    kw = re.sub(r"[^A-Za-z0-9_]", "", (keyword or "TIZIM").upper())[:14] or "TIZIM"
     is_long = float(target_duration or 10.0) >= 25.0
 
     # Extract crisp 1-2 word 3D behindWord (<= 13 chars)
@@ -405,7 +652,8 @@ async def run_one_click_autopilot(
                 pass
 
     t0 = time.time()
-    bp = build_autopilot_blueprint(topic, keyword, target_duration=target_duration)
+    await _emit("🧠 <b>2-qadam:</b> Jonli internet faktlari va AI-rejissyor orqali noyob ssenariy tuzilmoqda...")
+    bp = await generate_dynamic_ai_blueprint(topic, keyword, target_duration=target_duration)
     kw = bp["keyword"]
     is_long = bool(bp.get("is_long"))
     ts = int(time.time())
@@ -419,7 +667,7 @@ async def run_one_click_autopilot(
     await _emit("🎙 <b>3-qadam:</b> Kino Bariton HD ovoz sintez qilinmoqda...")
     vo_wav = out_dir / f"00_voice_{voice_profile}.wav"
     tts_meta = await synthesize_pro_uzbek_voice(bp["voice_script"], vo_wav, profile=voice_profile, speed=1.0)
-    min_floor = max(float(target_duration or 10.0), 42.0) if is_long else 7.2
+    min_floor = max(float(target_duration or 12.0), 40.0) if is_long else max(float(target_duration or 11.0), 9.5)
     vo_dur = max(min_floor, float(tts_meta["duration"]) + 0.85)
 
     # 2. Fetch Modal Faster-Whisper Word-Timestamps in parallel with 4:5 Cover & v4 9:16 Hook frames!
@@ -432,8 +680,8 @@ async def run_one_click_autopilot(
     )
 
     cover_4x5_png = out_dir / f"01_KARUSEL_muqova_{kw.lower()}_4x5.png"
-    hook_dur = 3.2 if is_long else 2.5
-    rem_dur = max(38.8 if is_long else 4.6, round(vo_dur - hook_dur, 2))
+    hook_dur = 3.2 if is_long else 2.6
+    rem_dur = max(36.8 if is_long else 6.8, round(vo_dur - hook_dur, 2))
 
     whisper_task = asyncio.create_task(transcribe_uzbek_via_modal(vo_16k))
     cover_task = asyncio.create_task(
@@ -446,106 +694,37 @@ async def run_one_click_autopilot(
     w_res, _, hook_frames = await asyncio.gather(whisper_task, cover_task, hook_frames_task)
     vo_16k.unlink(missing_ok=True)
 
-    # 3. Render 9:16 Full-Frame v4 Hook + Claude TechBrief Multi-Scene Story + Clawd
-    await _emit("🎬 <b>5-qadam:</b> 9:16 Claude TechBrief ko‘p-sahnali kadrlar render qilinmoqda...")
+    # 3. Render 9:16 Full-Frame v4 Hook + Bespoke AI-Authored Multi-Scene Story + Clawd
+    await _emit("🎬 <b>5-qadam:</b> 9:16 Claude TechBrief noyob sahnalari render qilinmoqda...")
     raw_mp4 = out_dir / "tmp_raw_reel.mp4"
-    s1 = bp["scene1"]
 
-    if is_long:
-        # 6 rich authored TechBrief chapters after 3.2s v4 3D Hook = 7 distinct visual chapters (~43-47s total!)
-        d1 = round(rem_dur * 0.16, 2)
-        d2 = round(rem_dur * 0.19, 2)
-        d3 = round(rem_dur * 0.17, 2)
-        d4 = round(rem_dur * 0.18, 2)
-        d5 = round(rem_dur * 0.14, 2)
-        d6 = round(rem_dur - (d1 + d2 + d3 + d4 + d5), 2)
-        scenes_payload = [
-            {
-                "type": "hook_stat",
-                "duration": d1,
-                "eyebrow": s1["eyebrow"],
-                "headlineHtml": s1["headlineHtml"],
-                "subtext": s1["subtext"],
-                "statLabel": s1["statLabel"],
-                "statValue": s1["statValue"],
-                "statSuffix": "%",
-                "barPercent": s1["statValue"],
-            },
-            {
-                "type": "pipeline_dm",
-                "duration": d2,
-                "eyebrow": "02 · AVTONOM ZANJIR",
-                "headlineHtml": "3 bosqichli <em>AI-imperiya</em><br>ishlash arxitekturasi",
-                "steps": [
-                    {
-                        "num": "01 · Ssenariy va Strategiya",
-                        "title": "Claude AI g‘oya va kontent rejasini tuzadi",
-                        "desc": "Auditoriya og‘rig‘ini topib, viral ssenariy yaratadi",
-                        "accent": False,
-                    },
-                    {
-                        "num": "02 · Vibe Coding MVP",
-                        "title": "Dasturchisiz 48 soatda tayyor raqamli tizim",
-                        "desc": "Claude Skills kod va dizaynni avtonom yig‘adi",
-                        "accent": False,
-                    },
-                    {
-                        "num": f"03 · Aqlli Follow-Gate («{kw}»)",
-                        "title": "Har bir izohga 3 soniyada Direct javob",
-                        "desc": "Obunani tekshiradi va qo‘llanmani avto-yuboradi",
-                        "accent": True,
-                    },
-                ],
-            },
-            {
-                "type": "code_architecture",
-                "duration": d3,
-                "eyebrow": "03 · VIBE CODING · $0 STACK",
-                "headlineHtml": "Kod yozmasdan <em>48 soatda</em><br>tayyor mahsulot",
-                "fileName": f"imperiya_{kw.lower()}.py · $0 STACK",
-                "codeLines": [
-                    "# @diyor.ctr · 1-Kishilik AI-Imperiya",
-                    "agent = ClaudeSkill(model='sonnet-4.6')",
-                    "mvp = agent.vibe_build(hours=48, cost=0)",
-                    f"gate = SmartFollowGate(keyword='{kw}')",
-                    "gate.run_24_7(reply_sec=3, auto_dm=True)",
-                ],
-                "subtext": "Server va jamoa xarajatisiz 24/7 bulutli avtopilot.",
-            },
-            {
-                "type": "scorecard_bars",
-                "duration": d4,
-                "eyebrow": "04 · SAMARADORLIK TAHLILI",
-                "headlineHtml": "Natija <em>raqamlarda</em>:<br>to‘liq avtopilot kuchi",
-                "score": 98,
-                "bars": [
-                    {"label": "Ishga tushirish tezligi (48s)", "value": 96},
-                    {"label": "Direct avto-javob aniqligi", "value": 99},
-                    {"label": "Jamoa xarajati tejalishi", "value": s1["statValue"]},
-                ],
-            },
-            {
-                "type": "hook_stat",
-                "duration": d5,
-                "eyebrow": "05 · 24/7 MASSHTAB",
-                "headlineHtml": "Uxlayotganingizda ham<br><em>sotuv to‘xtamaydi</em>",
-                "subtext": "Har bir izoh va obunachi bilan 3 soniyada shaxsiy muloqot.",
-                "statLabel": "KECHAYU KUNDUZ AVTOPILOT REJIMI",
-                "statValue": 24,
-                "statSuffix": "/7",
-                "barPercent": 100,
-            },
-            {
-                "type": "cta_terminal",
-                "duration": d6,
-                "eyebrow": "06 · BEPUL QO‘LLANMA · DIRECT",
-                "headlineHtml": f"Izohda <em>«{kw}»</em><br>deb yozing",
-                "subtext": "@diyor.ctr sahifasiga obuna bo‘ling — 3 soniyada Direct’ga yuboriladi!",
-                "keyword": kw,
-            },
-        ]
+    ai_scenes = bp.get("scenes")
+    if isinstance(ai_scenes, list) and len(ai_scenes) >= 2:
+        # Weight multi-card scenes (`news_radar`, `pipeline_dm`, `scorecard_bars`, `vs_comparison`) slightly longer than CTA
+        weights: list[float] = []
+        for sc in ai_scenes:
+            st_t = sc.get("type", "hook_stat")
+            if st_t in ("news_radar", "pipeline_dm", "scorecard_bars", "vs_comparison"):
+                weights.append(1.22)
+            elif st_t == "cta_terminal":
+                weights.append(0.85)
+            else:
+                weights.append(1.0)
+        w_sum = sum(weights) or 1.0
+        scenes_payload = []
+        used = 0.0
+        for idx_s, sc in enumerate(ai_scenes):
+            sc_copy = dict(sc)
+            if idx_s == len(ai_scenes) - 1:
+                sc_copy["duration"] = max(2.4, round(rem_dur - used, 2))
+            else:
+                d_s = max(2.6, round(rem_dur * (weights[idx_s] / w_sum), 2))
+                sc_copy["duration"] = d_s
+                used += d_s
+            scenes_payload.append(sc_copy)
     else:
-        s1_dur = round(rem_dur * 0.56, 2)
+        s1 = bp["scene1"]
+        s1_dur = round(rem_dur * 0.58, 2)
         s2_dur = round(rem_dur - s1_dur, 2)
         scenes_payload = [
             {
@@ -572,8 +751,8 @@ async def run_one_click_autopilot(
     reel_meta = await render_diyor_motion_mp4(
         {
             "aspect": "9:16",
-            "theme": "lotion",
-            "topicTag": f"ai · {kw.lower()} · @diyor.ctr",
+            "theme": bp.get("theme", "lotion"),
+            "topicTag": f"{kw.lower()} · @diyor.ctr",
             "handle": "@DIYOR.CTR",
             "scenes": scenes_payload,
         },

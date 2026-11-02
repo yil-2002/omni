@@ -517,6 +517,67 @@ def build_diyor_motion_html(spec: dict[str, Any]) -> tuple[str, list[float], flo
               typeCode("{sid}_code", [{steps_arr}], {max(0.9, dur * 0.58):.2f}, {t0 + 0.22});
             """)
 
+        elif stype == "news_radar":
+            items = sc.get("items", [
+                {"badge": "BREAKING · 01", "title": "Yangi avlod AI agentlar mustaqil qaror qabul qilmoqda", "source": "Texnologiya tahlili · 2026"},
+                {"badge": "FAKT · 02", "title": "Kichik jamoalar yirik kompaniyalardan 4 barobar tezroq harakat qilmoqda", "source": "Bozor tadqiqoti"},
+                {"badge": "XULOSA · 03", "title": "Tez moslashgan bizneslar mijoz oqimini birinchi bo‘lib egallaydi", "source": "@diyor.ctr tahlili"},
+            ])[:3]
+            n_cards = []
+            for n_i, it in enumerate(items):
+                is_hi = (n_i == 0)
+                bdg_bg = "var(--accent-soft)" if is_hi else "var(--sage-soft)"
+                bdg_col = "var(--accent-deep)" if is_hi else "var(--sage)"
+                n_cards.append(f"""
+                <div class="card n-row n-r{n_i}" style="padding:{18 if is_compact else 22}px 26px; margin-bottom:{12 if is_compact else 15}px; border-left:4px solid {'var(--accent)' if is_hi else 'var(--sage)'};">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; letter-spacing:0.14em; background:{bdg_bg}; color:{bdg_col}; padding:4px 10px; border-radius:999px;">{it.get('badge', f'FAKT · 0{n_i+1}')}</span>
+                    <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--muted);">{it.get('source', '@diyor.ctr')}</span>
+                  </div>
+                  <div style="font-size:{20 if is_compact else 23}px; font-weight:700; line-height:1.32; letter-spacing:-0.015em; color:var(--ink);">{it.get('title', '')}</div>
+                </div>
+                """)
+            left_h = f"""
+              <div class="eyebrow"><span class="dot"></span>{sc.get("eyebrow", "MUHIM FAKTLAR VA TAHLIL")}</div>
+              <h2 class="h-serif s-hd" style="font-size:{64 if is_wide else (48 if is_compact else 62)}px; margin-bottom:{0 if is_wide else 24}px;">{sc.get("headlineHtml", "Bugungi eng muhim<br><em>3 ta o‘zgarish</em>")}</h2>
+            """
+            right_h = f"<div>{''.join(n_cards)}</div>"
+            scene_html_blocks.append(_wrap_scene_layout(aspect, sid, left_h, right_h))
+            js_blocks.append(f'tl.fromTo("#{sid} .s-hd", {{ y: 24, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.36, ease: "power3.out" }}, {t0 + 0.04});')
+            for n_i in range(len(items)):
+                nt = round(t0 + 0.20 + n_i * 0.34, 3)
+                js_blocks.append(f'tl.fromTo("#{sid} .n-r{n_i}", {{ y: 24, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.38, ease: "power3.out" }}, {nt});')
+
+        elif stype == "vs_comparison":
+            old_t = sc.get("oldTitle", "ESKI USUL (SEKIN VA QIMMAT)")
+            old_pts = sc.get("oldPoints", ["Qo‘lda soatlab vaqt sarflash", "Kechikkan javob tufayli mijoz yo‘qotish"])[:3]
+            new_t = sc.get("newTitle", "YANGI TIZIM (@DIYOR.CTR YONDASHUVI)")
+            new_pts = sc.get("newPoints", ["Jarayonni aniq tizimga solish", "24/7 tezkor natija va yuqori konversiya"])[:3]
+            old_li = "".join(f'<div style="font-size:{19 if is_compact else 21}px; color:var(--muted); margin-top:8px;">✕ &nbsp;{p}</div>' for p in old_pts)
+            new_li = "".join(f'<div style="font-size:{20 if is_compact else 22}px; font-weight:700; color:var(--ink); margin-top:9px;">✓ &nbsp;{p}</div>' for p in new_pts)
+            left_h = f"""
+              <div class="eyebrow"><span class="dot"></span>{sc.get("eyebrow", "TAQQOSLASH · ESKI VS YANGI")}</div>
+              <h2 class="h-serif s-hd" style="font-size:{64 if is_wide else (48 if is_compact else 62)}px; margin-bottom:{0 if is_wide else 24}px;">{sc.get("headlineHtml", "Nega ko‘pchilik<br><em>orqada qolmoqda?</em>")}</h2>
+            """
+            right_h = f"""
+              <div>
+                <div class="card vs-old" style="padding:20px 26px; margin-bottom:16px; background:var(--surface2); border-color:var(--border);">
+                  <div style="font-family:'JetBrains Mono',monospace; font-size:13px; letter-spacing:0.15em; color:#9e4733; font-weight:600;">{old_t}</div>
+                  {old_li}
+                </div>
+                <div class="card vs-new" style="padding:22px 26px; border:2px solid var(--accent); background:var(--surface);">
+                  <div style="font-family:'JetBrains Mono',monospace; font-size:13px; letter-spacing:0.15em; color:var(--sage); font-weight:600;">{new_t}</div>
+                  {new_li}
+                </div>
+              </div>
+            """
+            scene_html_blocks.append(_wrap_scene_layout(aspect, sid, left_h, right_h))
+            js_blocks.append(f"""
+              tl.fromTo("#{sid} .s-hd", {{ y: 24, opacity: 0 }}, {{ y: 0, opacity: 1, duration: 0.36, ease: "power3.out" }}, {t0 + 0.04});
+              tl.fromTo("#{sid} .vs-old", {{ x: -26, opacity: 0 }}, {{ x: 0, opacity: 1, duration: 0.38, ease: "power3.out" }}, {t0 + 0.20});
+              tl.fromTo("#{sid} .vs-new", {{ x: 26, opacity: 0, scale: 0.97 }}, {{ x: 0, opacity: 1, scale: 1.0, duration: 0.42, ease: "power3.out" }}, {t0 + 0.52});
+            """)
+
         else:  # cta_terminal
             kw = sc.get("keyword", "SKILL")
             term_w = "100%" if is_wide else ("84%" if is_compact else "74%")

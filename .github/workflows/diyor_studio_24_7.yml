@@ -8,9 +8,9 @@ on:
         required: true
         default: "Bir kishilik AI-Imperiya (Vibe Coding + Claude Skills)"
       keyword:
-        description: "Follow-Gate Direct kalit so'zi"
-        required: true
-        default: "SKILL"
+        description: "Follow-Gate Direct kalit so'zi (bo'sh qolsa AI mavzuga mos so'z tanlaydi)"
+        required: false
+        default: ""
       duration_sec:
         description: "Video davomiyligi (10 = qisqa, 44 = to'liq 7-sahnali)"
         required: true
@@ -78,11 +78,11 @@ jobs:
           from autopilot_conveyor import run_one_click_autopilot
 
           async def main():
-              out_d = Path("/home/user/.cache/diyor_vault/gh_out")
-              res = await run_one_click_autopilot(
-                  topic=os.environ.get("RENDER_TOPIC", "Bir kishilik AI-Imperiya"),
-                  keyword=os.environ.get("RENDER_KEYWORD", "SKILL"),
-                  out_dir=out_d,
+          out_d = Path("/home/user/.cache/diyor_vault/gh_out")
+          res = await run_one_click_autopilot(
+              topic=os.environ.get("RENDER_TOPIC", "2026 yilgi eng muhim AI yangiliklari"),
+              keyword=os.environ.get("RENDER_KEYWORD", ""),
+              out_dir=out_d,
                   voice_profile="modal_bariton_hd",
                   with_subtitles=True,
                   target_duration=float(os.environ.get("RENDER_DURATION", "44")),
