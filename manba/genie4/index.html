@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="uz">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tech Brief — Genie 4</title>
+    <script src="../../shared/vendor/gsap.min.js"></script>
+    <script src="../../shared/vendor/SplitText.min.js"></script>
+    <script src="../../shared/vendor/DrawSVGPlugin.min.js"></script>
+    <script src="../../shared/vendor/CustomEase.min.js"></script>
+    <style>
+      @font-face { font-family: "Fraunces"; font-style: normal; font-weight: 100 900; font-display: block; src: url("../../shared/fonts/Fraunces-var-normal.woff2") format("woff2"); }
+      @font-face { font-family: "Fraunces"; font-style: italic; font-weight: 100 900; font-display: block; src: url("../../shared/fonts/Fraunces-var-italic.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: block; src: url("../../shared/fonts/Inter-400.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: block; src: url("../../shared/fonts/Inter-500.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: block; src: url("../../shared/fonts/Inter-600.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: block; src: url("../../shared/fonts/Inter-700.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 800; font-display: block; src: url("../../shared/fonts/Inter-800.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: block; src: url("../../shared/fonts/JetBrainsMono-400.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: block; src: url("../../shared/fonts/JetBrainsMono-500.woff2") format("woff2"); }
+
+      :root {
+        --lotion: #faf9f5; --salt: #f0eee6; --oat: #e3dacc; --sand: #d4a27f;
+        --border: #d1cfc5; --ink: #141413; --noir: #2c2b26; --mid: #b0aea5;
+        --clay: #d97757; --clay-deep: #a04a2c; --clay-brand: #c1613f;
+        --blue: #6a9bcc;
+        --serif: "Fraunces", Georgia, serif; --sans: "Inter", Arial, sans-serif;
+        --mono: "JetBrains Mono", monospace;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1080px; height: 1920px; overflow: hidden; background: var(--lotion);
+        font-family: var(--sans); color: var(--ink); -webkit-font-smoothing: antialiased; }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; }
+
+      /* ---------- surface ---------- */
+      .paper { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.42;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/><feColorMatrix type='saturate' values='0'/></filter><rect width='240' height='240' filter='url(%23n)' opacity='0.30'/></svg>");
+        mix-blend-mode: multiply; }
+      .bloomA { position: absolute; width: 1150px; height: 1150px; left: -420px; top: -460px; z-index: 0;
+        background: radial-gradient(circle, rgba(217,119,87,0.22), rgba(217,119,87,0.05) 55%, transparent 72%); filter: blur(18px); }
+      .bloomB { position: absolute; width: 1250px; height: 1250px; right: -500px; bottom: -440px; z-index: 0;
+        background: radial-gradient(circle, rgba(106,155,204,0.14), rgba(106,155,204,0.03) 58%, transparent 74%); filter: blur(18px); }
+      .lightpass { position: absolute; inset: 0; z-index: 2; pointer-events: none; opacity: 0.5;
+        background: linear-gradient(104deg, rgba(120,104,88,0) 40%, rgba(120,104,88,0.10) 50%, rgba(120,104,88,0) 60%); }
+
+      /* ---------- HUD ---------- */
+      .hud { position: absolute; inset: 0; z-index: 9; pointer-events: none; font-family: var(--mono); }
+      .hud .top { position: absolute; left: 96px; right: 96px; top: 268px; display: flex; justify-content: space-between;
+        align-items: center; font-size: 20px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--mid); }
+      .hud .top b { color: var(--clay-deep); font-weight: 500; }
+      .hud .bar { position: absolute; left: 96px; right: 96px; top: 318px; height: 3px; background: rgba(20,20,19,0.08); }
+      .hud .bar i { display: block; height: 100%; width: 0%; background: var(--clay-brand); }
+      .hud .bot { position: absolute; left: 96px; right: 96px; bottom: 512px; display: flex; justify-content: space-between;
+        align-items: center; font-size: 20px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mid); }
+      .hud .bot .swipe { display: inline-flex; align-items: center; gap: 10px; color: var(--clay-deep); }
+      .hud .corner { position: absolute; width: 26px; height: 26px; border: 1px solid rgba(209,207,197,0.9); }
+      .hud .c-tl { left: 96px; top: 262px; border-right: 0; border-bottom: 0; }
+      .hud .c-tr { right: 96px; top: 262px; border-left: 0; border-bottom: 0; }
+      .hud .c-bl { left: 96px; bottom: 458px; border-right: 0; border-top: 0; }
+      .hud .c-br { right: 96px; bottom: 458px; border-left: 0; border-top: 0; }
+      .hud .hw { position: relative; display: block; height: 1em; overflow: hidden; line-height: 1; }
+      .hud .hwi { display: block; }
+      .hud .hc { display: block; height: 1em; line-height: 1; }
+      .hud .hs { display: block; opacity: 0.45; margin: 0 0.16em; }
+      .hud .ht { display: block; opacity: 0.5; }
+      .hud .top #clock { display: inline-flex; align-items: center; }
+
+      .punch { transform-origin: 50% 42%; }
+      .kick { --rule: 0; position: relative; display: inline-flex; align-items: center; gap: 12px; font-family: var(--mono);
+        font-size: 21px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--clay-deep); margin-bottom: 24px; }
+      .kick::after { content: ""; position: absolute; left: 0; bottom: -6px; height: 1px; width: calc(var(--rule) * 1%);
+        background: linear-gradient(90deg, var(--clay), rgba(217,119,87,0)); }
+      .kick .dotmk { width: 9px; height: 9px; border-radius: 50%; background: var(--clay); }
+
+      /* ---------- scenes ---------- */
+      .scene { position: absolute; inset: 0; z-index: 4; opacity: 0; padding: 380px 110px 560px; transform-origin: 50% 46%;
+        display: flex; flex-direction: column; justify-content: center; }
+      .ed { font-family: var(--serif); font-weight: 500; font-variation-settings: "opsz" 144, "SOFT" 28, "WONK" 0;
+        letter-spacing: -0.03em; line-height: 0.98; color: var(--ink); }
+      .ed em { font-style: italic; font-weight: 480; color: var(--clay-brand); }
+      .bl { font-family: var(--sans); font-weight: 800; letter-spacing: -0.05em; line-height: 0.92; color: var(--ink); }
+      .bl .cl { color: var(--clay-brand); }
+      .cap { font-family: var(--sans); font-size: 33px; line-height: 1.44; color: var(--noir); font-weight: 400; }
+      .cap b { font-weight: 800; color: var(--ink); }
+
+      /* S1 hook */
+      #s1 .big { font-size: 150px; }
+      #s1 .big .x { color: var(--clay-brand); }
+      #s1 .hk { font-size: 74px; margin-top: 22px; max-width: 860px; }
+      #s1 .sub { margin-top: 26px; font-family: var(--sans); font-size: 32px; color: var(--noir); font-weight: 500; line-height: 1.42; }
+      #s1 .sub b { font-weight: 800; }
+
+      /* S2 dial */
+      #s2 .arcwrap { position: relative; width: 470px; height: 470px; margin: 4px auto 0; }
+      #s2 .arcwrap .num { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+      #s2 .arcwrap .v { font-family: var(--sans); font-weight: 800; font-size: 150px; line-height: 1; letter-spacing: -0.055em; }
+      #s2 .arcwrap .l { font-family: var(--mono); font-size: 20px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--clay-deep); margin-top: 8px; }
+      #s2 .cap { margin-top: 30px; text-align: center; }
+
+      /* S3 world window */
+      #s3 .win { position: relative; margin-top: 40px; height: 470px; border-radius: 24px; overflow: hidden;
+        border: 1px solid var(--oat); background: var(--salt); }
+      #s3 .win .bar { position: absolute; left: 0; right: 0; top: 0; height: 52px; display: flex; align-items: center; gap: 10px;
+        padding: 0 20px; border-bottom: 1px solid var(--oat); background: rgba(250,249,245,0.8); z-index: 3; }
+      #s3 .win .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--oat); }
+      #s3 .win .lab { margin-left: auto; font-family: var(--mono); font-size: 16px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mid); }
+      #s3 canvas#world { position: absolute; left: 0; top: 52px; width: 100%; height: 418px; display: block; }
+      #s3 .cap { margin-top: 26px; text-align: center; }
+      #s3 .prompt { position: absolute; left: 18px; right: 18px; bottom: 40px; z-index: 3; display: flex; align-items: center;
+        gap: 2px; padding: 12px 16px; border-radius: 12px; background: rgba(20,20,19,0.62); backdrop-filter: blur(2px);
+        font-family: var(--mono); font-size: 19px; letter-spacing: 0.02em; color: #f7f4ec; opacity: 0; transform: translateY(8px); }
+      #s3 .prompt .caret { width: 9px; height: 20px; background: var(--clay); display: inline-block; animation: blink 1s steps(2) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+      #s3 .legend { margin-left: 18px; display: flex; gap: 14px;
+        font-family: var(--mono); font-size: 15px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--noir); }
+      #s3 .legend span { display: inline-flex; align-items: center; gap: 7px; }
+      #s3 .legend i { width: 9px; height: 9px; border-radius: 50%; background: var(--clay); display: inline-block; }
+
+      /* S4 costs */
+      #s4 .rows { margin-top: 8px; }
+      #s4 .row { display: flex; align-items: flex-start; gap: 22px; padding: 24px 0; border-top: 1px solid var(--oat); }
+      #s4 .row:last-child { border-bottom: 1px solid var(--oat); }
+      #s4 .idx { flex: 0 0 52px; font-family: var(--mono); font-size: 20px; color: var(--mid); padding-top: 8px; }
+      #s4 .row .h { font-family: var(--sans); font-weight: 800; font-size: 43px; letter-spacing: -0.035em; line-height: 1.1; }
+      #s4 .row .h .no { color: var(--clay-brand); }
+      #s4 .row .d { font-size: 26px; color: var(--noir); margin-top: 6px; line-height: 1.4; }
+      #s4 .note { margin-top: 26px; font-family: var(--mono); font-size: 20px; line-height: 1.5; letter-spacing: 0.06em; color: var(--clay-deep); }
+
+      /* S5 who gets it */
+      #s5 .take { margin-top: 6px; }
+      #s5 .take .row { display: flex; align-items: center; gap: 16px; padding: 17px 0; border-bottom: 1px solid var(--oat); }
+      #s5 .take .row:first-child { border-top: 1px solid var(--oat); }
+      #s5 .take .tick { flex: 0 0 34px; height: 34px; border-radius: 50%; border: 1.5px solid var(--clay-brand);
+        display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 17px; color: var(--clay-deep); }
+      #s5 .take .k { font-size: 28px; font-weight: 600; color: var(--ink); }
+      #s5 .take .w { margin-left: auto; font-family: var(--mono); font-size: 17px; letter-spacing: 0.14em;
+        text-transform: uppercase; color: var(--mid); }
+      #s5 .take .row.on .w { color: var(--clay-deep); }
+      #s5 .cap { margin-top: 26px; }
+
+      /* S6 the withheld numbers */
+      #s6 .miss { margin-top: 18px; }
+      #s6 .miss .m { display: flex; align-items: center; justify-content: space-between; padding: 20px 0;
+        border-bottom: 1px solid var(--oat); }
+      #s6 .miss .m:first-child { border-top: 1px solid var(--oat); }
+      #s6 .miss .k { font-family: var(--sans); font-weight: 600; font-size: 30px; color: var(--ink); }
+      #s6 .miss .d { font-family: var(--mono); font-size: 34px; color: var(--clay-brand); }
+      #s6 { align-items: center; text-align: center; }
+      #s6 .big2 { font-size: 250px; line-height: 0.9; letter-spacing: -0.06em; }
+      #s6 .big2 small { display: block; font-family: var(--mono); font-size: 30px; letter-spacing: 0.24em; text-transform: uppercase;
+        color: var(--clay-deep); margin-top: 10px; }
+      #s6 .cap { margin-top: 30px; max-width: 820px; }
+
+      /* S7 loop */
+      #s7 { align-items: center; text-align: center; }
+      #s7 .fin { font-size: 132px; line-height: 0.96; }
+      #s7 .fin em { display: block; font-family: var(--serif); font-style: italic; font-weight: 500; color: var(--clay-brand);
+        font-size: 80px; letter-spacing: -0.02em; margin-top: 12px; }
+      #s7 .cta { margin-top: 44px; display: inline-flex; align-items: center; gap: 14px; padding: 20px 30px;
+        border: 1.5px solid var(--clay-brand); border-radius: 999px; font-family: var(--mono); font-size: 22px;
+        letter-spacing: 0.16em; text-transform: uppercase; color: var(--clay-deep); background: rgba(250,249,245,0.7); }
+      #s7 .src { margin-top: 28px; font-family: var(--mono); font-size: 18px; letter-spacing: 0.1em; color: var(--mid); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="20.0" data-width="1080" data-height="1920">
+      <div class="bloomA"></div>
+      <div class="bloomB"></div>
+      <div class="lightpass"></div>
+      <div class="paper"></div>
+
+      <!-- ========== S1 · HOOK (0 → 1.8) ========== -->
+      <div class="scene clip" id="s1" data-start="0" data-duration="1.8" data-track-index="0">
+        <div class="punch">
+          <div class="kick"><span class="dotmk"></span>DeepMind · 27.10.2026</div>
+          <div class="bl big">Ishlayotgan <span class="x">dunyo</span></div>
+          <div class="ed hk" style="font-size:74px; margin-top:18px;">Endi u bilan <em>gaplashish</em> mumkin</div>
+          <div class="sub">Genie 4 — real vaqtda ovoz chiqaradi va uni <b>yozib</b> boshqarish mumkin.</div>
+        </div>
+      </div>
+
+      <!-- ========== S2 · the jump (1.8 → 5.6) ========== -->
+      <div class="scene clip" id="s2" data-start="1.8" data-duration="3.8" data-track-index="1">
+        <div class="punch">
+          <div class="kick"><span class="dotmk"></span>01 — Nima o'zgardi</div>
+          <div class="ed" style="font-size:72px;">Sahna <em>ikki barobar</em> uzun</div>
+          <div class="arcwrap">
+            <svg width="470" height="470" viewBox="0 0 470 470">
+              <circle cx="235" cy="235" r="208" fill="none" stroke="#efece2" stroke-width="2" />
+              <g id="ticks"></g>
+              <circle id="arc" cx="235" cy="235" r="208" fill="none" stroke="#d97757" stroke-width="12"
+                stroke-linecap="round" transform="rotate(-90 235 235)" />
+              <circle id="arc2" cx="235" cy="235" r="176" fill="none" stroke="#b0aea5" stroke-width="5"
+                stroke-linecap="round" transform="rotate(-90 235 235)" opacity="0.5" />
+            </svg>
+            <div class="num"><div class="v"><span id="p120">60</span>s</div><div class="l" id="diallab">GENIE 3</div></div>
+          </div>
+          <div class="cap" style="margin-top:26px; text-align:center;">Genie 3 ~60 soniya ushlardi. Genie 4 — <b>~120 soniya</b>. Ikki barobar.</div>
+        </div>
+      </div>
+
+      <!-- ========== S3 · the world (5.6 → 9.6) ========== -->
+      <div class="scene clip" id="s3" data-start="5.6" data-duration="4.0" data-track-index="2">
+        <div class="punch">
+          <div class="kick"><span class="dotmk"></span>02 — Ko'rsatma</div>
+          <div class="ed" style="font-size:56px; margin-bottom:16px;">"Yomg'ir yog'dir" —<br><em>yomg'ir ovozi</em></div>
+          <div class="win">
+            <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="legend"><span><i></i>audio</span><span><i style="background:#6a9bcc"></i>steer</span></span>
+              <span class="lab">GENIE 4 · SIM</span></div>
+            <canvas id="world" width="760" height="418"></canvas>
+            <div class="prompt" id="prompt"><span class="t" id="promptxt">yomg'ir yog'dir</span><span class="caret"></span></div>
+            <div class="legend"><span><i></i>audio</span><span><i style="background:#6a9bcc"></i>steer</span></div>
+          </div>
+          <div class="cap">Ovoz, musiqa va dialog <b>video bilan bir passda</b> tug'iladi — keyin qo'shilmaydi.</div>
+        </div>
+      </div>
+
+      <!-- ========== S4 · the costs (9.6 → 13.0) ========== -->
+      <div class="scene clip" id="s4" data-start="9.6" data-duration="3.4" data-track-index="3">
+        <div class="punch">
+          <div class="kick"><span class="dotmk"></span>03 — Halol chegara</div>
+          <div class="ed" style="font-size:80px; margin-bottom:6px;">Nima <em>yo'q?</em></div>
+          <div class="rows">
+            <div class="row"><div class="idx">01</div><div><div class="h">Ochiq API <span class="no">— yo'q</span></div><div class="d">Research preview: faqat trusted testers, navbat bor.</div></div></div>
+            <div class="row"><div class="idx">02</div><div><div class="h">Barqaror obyekt <span class="no">— yo'q</span></div><div class="d">Uzun sessiyada detallar va obyektlar suriladi.</div></div></div>
+            <div class="row"><div class="idx">03</div><div><div class="h">O'qisa bo'ladigan matn <span class="no">— yo'q</span></div><div class="d">Juda aniq fizika ham, ekrandagi yozuv ham hali emas.</div></div></div>
+          </div>
+          <div class="note">2 daqiqa — bu daraja emas, bu bitta kadr.</div>
+        </div>
+      </div>
+
+      <!-- ========== S5 · who gets it (13.0 → 16.4) ========== -->
+      <div class="scene clip" id="s5" data-start="13" data-duration="3.4" data-track-index="4">
+        <div class="punch">
+          <div class="kick"><span class="dotmk"></span>04 — Kimga tegadi</div>
+          <div class="ed" style="font-size:74px;">Kim <em>oladi?</em></div>
+          <div class="take">
+            <div class="row"><div class="tick">1</div><div class="k">Trusted testers</div><div class="w">hozir</div></div>
+            <div class="row"><div class="tick">2</div><div class="k">AI Ultra · Project Genie</div><div class="w">haftalar</div></div>
+            <div class="row"><div class="tick">3</div><div class="k">Gemini API · AI Studio</div><div class="w">early access</div></div>
+          </div>
+          <div class="cap">Har video va audio <b>SynthID</b> bilan belgilanadi.</div>
+        </div>
+      </div>
+
+      <!-- ========== S6 · the number (16.4 → 18.2) ========== -->
+      <div class="scene clip" id="s6" data-start="16.4" data-duration="1.8" data-track-index="5">
+        <div class="punch">
+          <div class="kick"><span class="dotmk"></span>05 — Va yana bir narsa</div>
+          <div class="ed" style="font-size:66px;">E'lon qilinmagan <em>uch raqam</em></div>
+          <div class="miss">
+            <div class="m"><span class="k">Rezolyutsiya</span><span class="d">—</span></div>
+            <div class="m"><span class="k">Narx</span><span class="d">—</span></div>
+            <div class="m"><span class="k">Mustaqil benchmark</span><span class="d">—</span></div>
+          </div>
+          <div class="cap" style="margin-top:22px;">Ko'rgazma — <b>bor</b>. Raqam — <b>yo'q</b>.</div>
+        </div>
+      </div>
+
+      <!-- ========== S7 · loop payoff (18.2 → 20.0) ========== -->
+      <div class="scene clip" id="s7" data-start="18.2" data-duration="1.8" data-track-index="6">
+        <div class="punch">
+          <div class="bl fin" id="fin">Dunyo <span class="cl">↔</span> prompt<em>Hali o'yin emas</em></div>
+          <div class="cta" id="cta"><span>Saqlab qo'ying</span><span>·</span><span>Keyingi qism</span></div>
+          <div class="src" id="src">Manba: Google DeepMind, 27.10.2026 · research preview</div>
+        </div>
+      </div>
+
+      <!-- ---------- HUD ---------- -->
+      <div class="hud">
+        <div class="corner c-tl"></div><div class="corner c-tr"></div>
+        <div class="corner c-bl"></div><div class="corner c-br"></div>
+        <div class="bot">
+          <span class="swipe">↗ <span>genie 4 · deepmind</span></span>
+          <span>@DIYOR.CTR</span>
+        </div>
+      </div>
+
+      
+      <audio id="fx" src="assets/fx.ogg" data-start="0" data-duration="20" data-track-index="9" data-volume="0.92"></audio>
+    </div>
+
+    <script>
+      gsap.registerPlugin(SplitText, DrawSVGPlugin, CustomEase);
+      CustomEase.create("snapEase", "M0,0 C0.14,0 0.2,1 1,1");
+      CustomEase.create("settle", "M0,0 C0.16,0.84 0.24,1 1,1");
+
+      const D = 20.0;
+      const SC_IDS = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+      const CUT = [0, 1.8, 5.6, 9.6, 13.0, 16.4, 18.2];
+      const ENDS = [1.8, 5.6, 9.6, 13.0, 16.4, 18.2, 20.0];
+
+      /* ticks around the dial */
+      (function () {
+        const NS = "http://www.w3.org/2000/svg", g = document.getElementById("ticks");
+        for (let i = 0; i < 60; i++) {
+          const a = (i / 60) * Math.PI * 2 - Math.PI / 2;
+          const l = document.createElementNS(NS, "line");
+          const r1 = 208 - 11, r2 = 208 - (i % 5 === 0 ? 22 : 16);
+          l.setAttribute("x1", (235 + Math.cos(a) * r1).toFixed(1));
+          l.setAttribute("y1", (235 + Math.sin(a) * r1).toFixed(1));
+          l.setAttribute("x2", (235 + Math.cos(a) * r2).toFixed(1));
+          l.setAttribute("y2", (235 + Math.sin(a) * r2).toFixed(1));
+          l.setAttribute("stroke", i % 5 === 0 ? "#d4a27f" : "#e6e0d2");
+          l.setAttribute("stroke-width", "2");
+          g.appendChild(l);
+        }
+      })();
+
+      const tl = gsap.timeline({ paused: true });
+
+      /* scene gating + whip pan */
+      SC_IDS.forEach((id, i) => {
+        const el = document.getElementById(id);
+        gsap.set(el, { opacity: i === 0 ? 1 : 0 });
+        if (i > 0) tl.set(el, { opacity: 1 }, CUT[i] - 0.0001);
+        tl.set(el, { opacity: 0 }, i === ENDS.length - 1 ? ENDS[i] - 0.001 : ENDS[i] + 0.02);
+        if (i === 0) { tl.set(el, { opacity: 1 }, 0); tl.set(el, { opacity: 0 }, ENDS[0] - 0.0001); }
+        const dir = i % 2 === 0 ? 1 : -1;
+        if (i > 0) tl.fromTo(el, { x: 84 * dir, scale: 1.06 }, { x: 0, scale: 1, duration: 0.18, ease: "power3.out" }, CUT[i]);
+        if (i < ENDS.length - 1) {
+          tl.to(el, { x: -72 * dir, scale: 0.985, opacity: 0, duration: 0.13, ease: "power2.in" }, ENDS[i] - 0.12);
+          tl.set(el, { x: 0, scale: 1 }, ENDS[i] + 0.03);
+        }
+      });
+
+      /* ambience */
+      tl.fromTo(".bloomA", { x: -60, y: -40 }, { x: 90, y: 70, duration: D, ease: "sine.inOut" }, 0);
+      tl.fromTo(".bloomB", { x: 50, y: 40 }, { x: -80, y: -60, duration: D, ease: "sine.inOut" }, 0);
+            tl.fromTo(".hud .corner, .hud .top, .hud .bot", { opacity: 0 }, { opacity: 1, duration: 0.35, ease: "power2.out", stagger: 0.04 }, 0.05);
+
+      /* ================= S1 · HOOK ================= */
+      tl.fromTo("#s1 .big", { scale: 1.07 }, { scale: 1, duration: 0.6, ease: "power3.out" }, 0);
+      const sp1 = new SplitText("#s1 .hk", { type: "words" });
+      tl.fromTo(sp1.words, { yPercent: 115, opacity: 0 }, { yPercent: 0, opacity: 1, duration: 0.5, ease: "settle", stagger: 0.04 }, 0.3);
+      tl.fromTo("#s1 .sub", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.36, ease: "power3.out" }, 0.78);
+      tl.fromTo("#s1", { scale: 1.012, y: 6 }, { scale: 1.008, y: 0, duration: 0.16, ease: "power2.in" }, 0);
+      tl.fromTo("#s1", { scale: 1.008, y: 0 }, { scale: 1.042, y: -4, duration: 1.64, ease: "power1.out" }, 0.16);
+
+      /* ================= S2 · the jump ================= */
+      tl.fromTo("#s2 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 1.80);
+      const spS2 = new SplitText("#s2 .ed", { type: "words" });
+      tl.fromTo(spS2.words, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "snapEase", stagger: 0.05 }, 1.88);
+      tl.fromTo("#s2 .arcwrap", { scale: 0.94, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.5, ease: "power3.out" }, 2.02);
+      tl.fromTo("#ticks line", { opacity: 0 }, { opacity: 1, duration: 0.15, stagger: { each: 0.008 } }, 2.1);
+      /* Genie 3 (60 s) first, then Genie 4 (120 s) sweeps past it: the comparison IS the motion */
+      tl.fromTo("#arc2", { drawSVG: "0%" }, { drawSVG: "50%", duration: 0.9, ease: "power2.inOut" }, 2.12);
+      tl.fromTo("#arc2", { stroke: "#b0aea5" }, { stroke: "#8f8d84", duration: 0.2 }, 2.12);
+      tl.fromTo("#arc", { drawSVG: "0%" }, { drawSVG: "100%", duration: 1.35, ease: "power2.inOut" }, 2.95);
+      (function () {
+        const el = document.getElementById("p120"), lab = document.getElementById("diallab"), p = { _v: 60 };
+        Object.defineProperty(p, "v", { get() { return this._v; }, set(x) { this._v = x; el.textContent = Math.round(x); } });
+        el.textContent = "60";
+        /* the inner gauge is Genie 3's 60 s; the outer arc doubles it and the label flips at the crossing */
+        tl.to(lab, { opacity: 0, duration: 0.18 }, 2.9);
+        tl.to(lab, { opacity: 1, duration: 0.18 }, 3.1);
+        tl.to(lab, { "font-size": "18px", duration: 0.2 }, 3.1);
+        tl.call(() => { lab.textContent = "GENIE 4"; }, null, 3.12);
+        tl.to(p, { v: 120, duration: 1.35, ease: "power2.inOut" }, 2.95);
+      })();
+      tl.fromTo("#s2 .cap", { y: 12, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, ease: "power3.out" }, 4.35);
+
+      /* ================= S3 · the world window ================= */
+      tl.fromTo("#s3 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 5.60);
+      const spS3 = new SplitText("#s3 .ed", { type: "words" });
+      tl.fromTo(spS3.words, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "snapEase", stagger: 0.045 }, 5.68);
+      tl.fromTo("#s3 .win", { y: 30, opacity: 0, scale: 0.97 }, { y: 0, opacity: 1, scale: 1, duration: 0.55, ease: "power3.out" }, 5.95);
+      tl.fromTo("#s3 .legend", { opacity: 0 }, { opacity: 1, duration: 0.3 }, 6.4);
+      /* the prompt is typed, then the world answers: that is the whole product story in one move */
+      tl.fromTo("#prompt", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.28, ease: "power2.out" }, 6.25);
+      tl.fromTo("#promptxt", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.75, ease: "steps(16)" }, 6.5);
+      tl.to("#prompt", { opacity: 0, y: 6, duration: 0.3, ease: "power2.in" }, 8.55);
+      tl.fromTo("#s3 .cap", { y: 12, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, ease: "power3.out" }, 8.6);
+
+      /* the simulated world itself owns the motion (drawn per frame in the renderer) */
+      const W = 760, H = 418;
+      let seed = 20261027;
+      const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+      const STARS = Array.from({ length: 70 }, () => ({ x: rnd() * W, y: rnd() * 300, r: 0.8 + rnd() * 1.8, p: rnd() * 6.28 }));
+      const HILLS = [[110, 402, 300, 66], [380, 418, 330, 84], [665, 404, 290, 64]];
+      const TREES = Array.from({ length: 12 }, (_, i) => ({ x: 24 + (i * 67) % 726, y: 258 + (i % 4) * 26, s: 0.42 + ((i * 37) % 10) / 20 }));
+      const DROPS = Array.from({ length: 90 }, () => ({ x: rnd() * (W + 200), y: rnd() * H, v: 340 + rnd() * 380, l: 10 + rnd() * 18 }));
+
+      /* a deterministic ridge line: sine stack, no randomness, so it never shimmers */
+      function ridgePath(baseY, amp, seedK, col) {
+        const g = document.getElementById("world").getContext("2d");
+        g.beginPath(); g.moveTo(0, baseY);
+        for (let x = 0; x <= W; x += 10) {
+          const y = baseY
+            - amp * (0.55 + 0.45 * Math.sin(x * 0.0071 * seedK + seedK))
+            - amp * 0.32 * Math.sin(x * 0.019 * seedK + 2.1)
+            - amp * 0.14 * Math.sin(x * 0.045 * seedK);
+          g.lineTo(x, y);
+        }
+        g.lineTo(W, H); g.lineTo(0, H); g.closePath();
+        g.fillStyle = col; g.fill();
+      }
+      function ridge(baseY, amp, seedK, col) { ridgePath(baseY, amp, seedK, col); }
+
+      function drawWorld(t, from, to) {
+        const cv = document.getElementById("world");
+        const g = cv.getContext("2d");
+        const k = gsap.utils.clamp(0, 1, (t - from) / (to - from));         // 0 = clear dusk → 1 = full rain
+        g.clearRect(0, 0, W, H);
+        /* sky: dusk → squall */
+        const sky = g.createLinearGradient(0, 0, 0, H);
+        sky.addColorStop(0, mix("#2b3350", "#39404f", k));
+        sky.addColorStop(0.55, mix("#5a5478", "#5c6472", k));
+        sky.addColorStop(1, mix("#8d7f8e", "#7a828d", k));
+        g.fillStyle = sky; g.fillRect(0, 0, W, H);
+        /* stars fade out as the clouds come in */
+        STARS.forEach((s) => {
+          const a = Math.max(0, 0.9 - k * 1.5) * (0.5 + 0.5 * Math.sin(t * 2 + s.p));
+          if (a <= 0.01) return;
+          g.fillStyle = `rgba(255,248,230,${a})`;
+          g.beginPath(); g.arc(s.x, s.y, s.r, 0, 6.2832); g.fill();
+        });
+        /* the sun's last light sits on the horizon and dies as the squall arrives (a gradient, not a disc) */
+        const sun = g.createRadialGradient(560, 300, 0, 560, 300, 260);
+        sun.addColorStop(0, `rgba(226,168,116,${0.34 * (1 - k)})`);
+        sun.addColorStop(0.5, `rgba(214,150,110,${0.12 * (1 - k)})`);
+        sun.addColorStop(1, "rgba(214,150,110,0)");
+        g.fillStyle = sun; g.fillRect(0, 0, W, H);
+        /* clouds: stacked soft bands that thicken and drift faster as the front comes in */
+        for (let i = 0; i < 4; i++) {
+          const cy = 46 + i * 40, sp = 12 + i * 6 + k * 26;
+          const cx = ((t * sp + i * 260) % (W + 520)) - 260;
+          for (let j = 0; j < 3; j++) {
+            g.fillStyle = `rgba(232,233,240,${0.035 + 0.035 * k})`;
+            g.beginPath();
+            g.ellipse(cx + j * 34, cy + (j % 2) * 9, (120 - i * 14) * (1 - j * 0.18), 20 - i * 2, 0, 0, 6.2832);
+            g.fill();
+          }
+        }
+        /* distant ridge, mid ridge, then the grass plane: three tonal steps, all polylines so they read at a glance */
+        ridge(150, 46, 7, mix("#4b5560", "#4a545e", k), 0.9);
+        ridge(210, 34, 9, mix("#3f4b4c", "#3e4a48", k), 1.4);
+        const gr = g.createLinearGradient(0, 236, 0, H);
+        gr.addColorStop(0, mix("#42513f", "#3b4a3a", k));
+        gr.addColorStop(1, mix("#2b3a2e", "#26332a", k));
+        g.fillStyle = gr; g.fillRect(0, 236, W, H - 236);
+        /* trees swaying harder as the wind picks up */
+        TREES.forEach((tr, i) => {
+          const sway = Math.sin(t * (1.2 + k * 2.4) + i) * (2 + 7 * k);
+          g.strokeStyle = "rgba(20,26,24,0.9)"; g.lineWidth = 2.4;
+          g.beginPath(); g.moveTo(tr.x, tr.y + 26 * tr.s); g.lineTo(tr.x + sway * 0.4, tr.y); g.stroke();
+          g.fillStyle = "#28332f";
+          g.beginPath(); g.ellipse(tr.x + sway, tr.y - 4, 11 * tr.s, 17 * tr.s, 0, 0, 6.2832); g.fill();
+        });
+        /* rain: only after the prompt lands */
+        if (k > 0.02) {
+          g.strokeStyle = `rgba(200,220,235,${0.16 + 0.34 * k})`; g.lineWidth = 1.6;
+          DROPS.forEach((d) => {
+            const y = (d.y + t * d.v) % (H + 40) - 20;
+            const x = (d.x + t * 90 * k) % (W + 40) - 20;
+            g.beginPath(); g.moveTo(x, y); g.lineTo(x - 4 * k, y + d.l); g.stroke();
+          });
+          /* puddle shimmer */
+          g.fillStyle = `rgba(120,150,170,${0.10 * k})`;
+          g.beginPath(); g.ellipse(W * 0.5, H - 14, 380, 18, 0, 0, 6.2832); g.fill();
+        }
+      }
+      function mix(a, b, k) {
+        const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+        const c = (s) => Math.round(((pa >> s) & 255) + (((pb >> s) & 255) - ((pa >> s) & 255)) * k);
+        return `rgb(${c(16)},${c(8)},${c(0)})`;
+      }
+
+      /* ================= S4 · costs ================= */
+      tl.fromTo("#s4 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 9.60);
+      const spS4 = new SplitText("#s4 .ed", { type: "words" });
+      tl.fromTo(spS4.words, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "snapEase", stagger: 0.05 }, 9.68);
+      tl.fromTo("#s4 .row", { y: 26, opacity: 0 }, { y: 0, opacity: 1, duration: 0.42, ease: "power3.out", stagger: 0.2 }, 9.95);
+      tl.fromTo("#s4 .note", { y: 14, opacity: 0 }, { y: 0, opacity: 1, duration: 0.38, ease: "power2.out" }, 11.6);
+
+      /* ================= S5 · who gets it ================= */
+      tl.fromTo("#s5 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 13.0);
+      const spS5 = new SplitText("#s5 .ed", { type: "words" });
+      tl.fromTo(spS5.words, { y: 36, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "snapEase", stagger: 0.045 }, 13.08);
+      tl.fromTo("#s5 .take .row", { x: -18, opacity: 0 }, { x: 0, opacity: 1, duration: 0.42, ease: "power3.out", stagger: 0.26 }, 13.4);
+      tl.fromTo("#s5 .take .row", { "--": 0 }, { "--": 0, duration: 0.01 }, 13.4);
+      document.querySelectorAll("#s5 .take .row").forEach((r, i) => {
+        tl.to(r, { borderColor: i === 0 ? "#c1613f" : "#e3dacc", duration: 0.3 }, 13.4 + i * 0.26);
+        tl.to(r.querySelector(".tick"), { backgroundColor: "#f6e7df", duration: 0.3 }, 13.4 + i * 0.26);
+      });
+      tl.fromTo("#s5 .cap", { y: 12, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, ease: "power3.out" }, 14.5);
+
+      /* ================= S6 · the number ================= */
+      tl.fromTo("#s6 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 16.4);
+      const spS6 = new SplitText("#s6 .ed", { type: "words" });
+      tl.fromTo(spS6.words, { y: 34, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "snapEase", stagger: 0.05 }, 16.5);
+      tl.fromTo("#s6 .miss .m", { x: -16, opacity: 0 }, { x: 0, opacity: 1, duration: 0.34, ease: "power3.out", stagger: 0.14 }, 16.78);
+      tl.fromTo("#s6 .cap", { y: 12, opacity: 0 }, { y: 0, opacity: 1, duration: 0.35, ease: "power3.out" }, 17.2);
+
+      /* ================= S7 · loop ================= */
+      tl.fromTo("#fin", { scale: 0.94, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.5, ease: "snapEase" }, 18.22);
+      tl.fromTo("#cta", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.42, ease: "power3.out" }, 18.72);
+      tl.fromTo("#src", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 18.95);
+      tl.to("#s7", { scale: 1.02, duration: 1.78, ease: "none" }, 18.2);
+
+      /* ---------- micro life: every scene breathes, every rule draws itself ---------- */
+      SC_IDS.forEach((id, i) => {
+        const el = document.getElementById(id);
+        const dir = i % 2 ? -1 : 1;
+        tl.fromTo(el, { scale: 1.0, y: 0 }, { scale: 1.018, y: -6 * dir, duration: D, ease: "sine.inOut" }, 0);
+      });
+      gsap.utils.toArray(".kick").forEach((k) => tl.fromTo(k, { "--rule": 0 }, { "--rule": 100, duration: 0.5, ease: "power2.out" }, 0.05));
+
+      /* the world canvas is a pure function of time: redraw on every seek, both live and in the renderer */
+      const overlayTL = gsap.timeline({ paused: true });
+      function paintWorldAt(t) { drawWorld(t, 6.15, 8.4); }
+      const origSeek = tl.seek.bind(tl);
+      tl.seek = function (t, ...rest) { const r = origSeek(t, ...rest); paintWorldAt(t); return r; };
+      paintWorldAt(0);
+      /* also drive it while the composition plays */
+      if (typeof gsap.ticker !== "undefined") {
+        gsap.ticker.add(() => { if (!tl.paused()) paintWorldAt(tl.time()); });
+      }
+      window.__paintWorldAt = paintWorldAt;
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

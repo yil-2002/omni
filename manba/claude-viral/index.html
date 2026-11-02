@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="uz" data-resolution="portrait" data-fps="60">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="../../shared/vendor/gsap.min.js"></script>
+    <script src="../../shared/vendor/SplitText.min.js"></script>
+    <script src="../../shared/vendor/DrawSVGPlugin.min.js"></script>
+    <script src="../../shared/vendor/CustomEase.min.js"></script>
+    <style>
+      /* ===================================================================
+         VIRAL CUT · 9:16 · 19.6 s
+         Same Claude design system, re-edited for retention:
+         hook in the first 1.8 s, 7 hard cuts, one idea per cut,
+         loop-friendly ending, zero dead air.
+         =================================================================== */
+      @font-face { font-family: "Fraunces"; font-style: normal; font-weight: 100 900; font-display: block; src: url("../../shared/fonts/Fraunces-var-normal.woff2") format("woff2"); }
+      @font-face { font-family: "Fraunces"; font-style: italic; font-weight: 100 900; font-display: block; src: url("../../shared/fonts/Fraunces-var-italic.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: block; src: url("../../shared/fonts/Inter-400.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: block; src: url("../../shared/fonts/Inter-500.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: block; src: url("../../shared/fonts/Inter-600.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: block; src: url("../../shared/fonts/Inter-700.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-style: normal; font-weight: 800; font-display: block; src: url("../../shared/fonts/Inter-800.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: block; src: url("../../shared/fonts/JetBrainsMono-400.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: block; src: url("../../shared/fonts/JetBrainsMono-500.woff2") format("woff2"); }
+
+      :root {
+        --lotion: #faf9f5; --salt: #f0eee6; --oat: #e3dacc; --sand: #d4a27f;
+        --border: #d1cfc5; --ink: #141413; --noir: #2c2b26; --mid: #b0aea5;
+        --clay: #d97757; --clay-deep: #a04a2c; --clay-brand: #c1613f;
+        --blue: #6a9bcc;
+        --serif: "Fraunces", Georgia, serif; --sans: "Inter", Arial, sans-serif;
+        --mono: "JetBrains Mono", monospace;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1080px; height: 1920px; overflow: hidden; background: var(--lotion);
+        font-family: var(--sans); color: var(--ink); -webkit-font-smoothing: antialiased; }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; }
+
+      /* ---------- surface ---------- */
+      .paper { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.42;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/><feColorMatrix type='saturate' values='0'/></filter><rect width='240' height='240' filter='url(%23n)' opacity='0.30'/></svg>");
+        mix-blend-mode: multiply; }
+      .bloomA { position: absolute; width: 1150px; height: 1150px; left: -420px; top: -460px; z-index: 0;
+        background: radial-gradient(circle, rgba(217,119,87,0.22), rgba(217,119,87,0.05) 55%, transparent 72%); filter: blur(18px); }
+      .bloomB { position: absolute; width: 1250px; height: 1250px; right: -500px; bottom: -440px; z-index: 0;
+        background: radial-gradient(circle, rgba(106,155,204,0.14), rgba(106,155,204,0.03) 58%, transparent 74%); filter: blur(18px); }
+
+      /* ---------- HUD: everything inside x 90..990 / y 260..1445 ---------- */
+      .hud { position: absolute; inset: 0; z-index: 9; pointer-events: none; font-family: var(--mono); }
+      .hud .top { position: absolute; left: 96px; right: 96px; top: 268px; display: flex; justify-content: space-between;
+        align-items: center; font-size: 20px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--mid); }
+      .hud .top b { color: var(--clay-deep); font-weight: 500; }
+      .hud .bar { position: absolute; left: 96px; right: 96px; top: 318px; height: 3px; background: rgba(20,20,19,0.08); }
+      .hud .bar i { display: block; height: 100%; width: 0%; background: var(--clay-brand); }
+      .hud .bot { position: absolute; left: 96px; right: 96px; bottom: 512px; display: flex; justify-content: space-between;
+        align-items: center; font-size: 20px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mid); }
+      .hud .bot .swipe { display: inline-flex; align-items: center; gap: 10px; color: var(--clay-deep); }
+      .hud .bot .swipe .ar { display: inline-block; }
+      .hud .corner { position: absolute; width: 26px; height: 26px; border: 1px solid rgba(209,207,197,0.9); }
+      .hud .c-tl { left: 96px; top: 262px; border-right: 0; border-bottom: 0; }
+      .hud .c-tr { right: 96px; top: 262px; border-left: 0; border-bottom: 0; }
+      .hud .c-bl { left: 96px; bottom: 458px; border-right: 0; border-top: 0; }
+      .hud .c-br { right: 96px; bottom: 458px; border-left: 0; border-top: 0; }
+
+      /* MASK:#s1 .hk .row */
+      #s1 .hk .row { overflow: hidden; padding-bottom: 0.14em; margin-bottom: -0.14em; padding-right: 0.12em; margin-right: -0.12em; }
+      .hud .top #clock { display: inline-flex; align-items: center; }
+      .hud .hw { position: relative; display: block; height: 1em; overflow: hidden; line-height: 1; }
+      .hud .hwi { display: block; will-change: transform; }
+      .hud .hc { display: block; height: 1em; line-height: 1; }
+      .hud .hs { display: block; opacity: 0.45; margin: 0 0.16em; }
+      .hud .ht { display: block; opacity: 0.5; }
+
+      /* global light pass: a slow soft highlight crosses the frame, so no frame is ever still */
+      .lightpass { position: absolute; inset: 0; z-index: 2; pointer-events: none; opacity: 0.5;
+        background: linear-gradient(104deg, rgba(120,104,88,0) 40%, rgba(120,104,88,0.10) 50%,
+          rgba(120,104,88,0) 60%); }
+      /* MACRO: dedicated text wrapper - the breathing push owns only this element */
+      .punch { transform-origin: 50% 42%; }
+      /* MICRO-LIFE tokens */
+      .kick { --rule: 0; --pulse: 0; position: relative; }
+      .kick::after { content: ""; position: absolute; left: 0; bottom: -6px; height: 1px; width: calc(var(--rule) * 1%);
+        background: linear-gradient(90deg, var(--clay), rgba(217,119,87,0)); }
+      #s4 .row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+        background: var(--clay); opacity: calc(var(--pulse) * 0.55); }
+      #s4 .row { position: relative; }
+
+      /* ---------- scenes ---------- */
+      .scene { position: absolute; inset: 0; z-index: 4; opacity: 0; padding: 380px 110px 560px; transform-origin: 50% 46%;
+        display: flex; flex-direction: column; justify-content: center; }
+      .kick { display: inline-flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 21px;
+        letter-spacing: 0.22em; text-transform: uppercase; color: var(--clay-deep); margin-bottom: 24px; }
+      .kick .dotmk { width: 9px; height: 9px; border-radius: 50%; background: var(--clay); }
+      .ed { font-family: var(--serif); font-weight: 500; font-variation-settings: "opsz" 144, "SOFT" 28, "WONK" 0;
+        letter-spacing: -0.03em; line-height: 0.98; color: var(--ink); }
+      .ed em { font-style: italic; font-weight: 480; color: var(--clay-brand); }
+      .bl { font-family: var(--sans); font-weight: 800; letter-spacing: -0.05em; line-height: 0.92; color: var(--ink); }
+      .bl .cl { color: var(--clay-brand); }
+      .cap { font-family: var(--sans); font-size: 34px; line-height: 1.44; color: var(--noir); font-weight: 400; }
+      .cap b { font-weight: 800; color: var(--ink); }
+      .cap .em { font-family: var(--serif); font-style: italic; font-weight: 480; color: var(--clay-brand); font-size: 36px; }
+      .split-char { display: inline-block; will-change: transform; }
+      .split-word { display: inline-block; will-change: transform; }
+
+      /* ---------- S1 hook ---------- */
+      #s1 .hk { font-size: 78px; margin-top: 20px; max-width: 880px; }
+      #s1 .hk .row { display: block; }
+      #s1 .hk .row { display: block; overflow: hidden; padding-bottom: 4px; }
+      #s1 .big { font-size: 142px; margin-top: 4px; }
+      #s1 .big .x { color: var(--clay-brand); }
+      #s1 .sub { margin-top: 26px; font-family: var(--sans); font-size: 33px; color: var(--noir); font-weight: 500; line-height: 1.4; }
+      #s1 .sub b { font-weight: 800; }
+
+      /* ---------- S2 cost ---------- */
+      #s2 .arcwrap { position: relative; width: 480px; height: 480px; margin: 6px auto 0; }
+      #s2 .arcwrap .num { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+      #s2 .arcwrap .v { font-family: var(--sans); font-weight: 800; font-size: 146px; line-height: 1; letter-spacing: -0.055em; }
+      #s2 .arcwrap .l { font-family: var(--mono); font-size: 21px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--clay-deep); margin-top: 8px; }
+      #s2 .cap { margin-top: 34px; text-align: center; font-size: 33px; }
+
+      /* ---------- S3 filter + efficiency chart ---------- */
+      #s3 .funnel { position: relative; height: 360px; margin-top: 6px; }
+      #s3 .ring { position: absolute; left: 50%; top: 96px; width: 300px; height: 300px; margin: -150px 0 0 -150px;
+        border: 1px dashed rgba(209,207,197,0.95); border-radius: 50%; }
+      /* label is a chip ABOVE the ring - it never sits under the particles */
+      #s3 .gate { position: absolute; left: 50%; top: 6px; margin-left: -170px; width: 340px; text-align: center;
+        padding: 8px 0; border-radius: 999px; border: 1px solid var(--border); background: rgba(250,249,245,0.94);
+        font-family: var(--mono); font-size: 15px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--noir); }
+      #s3 .gate small { color: var(--clay-deep); font-size: 15px; margin-left: 8px; letter-spacing: 0.1em; }
+      /* halo: exactly 8 survivors sit on 8 evenly spaced points = 8 % */
+      #s3 .halo { position: absolute; left: 50%; top: 96px; width: 232px; height: 232px; margin: -116px 0 0 -116px;
+        border: 1px dashed rgba(193,97,63,0.35); border-radius: 50%; opacity: 0; }
+      #s3 .dot { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: var(--sand); margin: -4.5px 0 0 -4.5px; }
+      #s3 .dot.keep { background: var(--clay-brand); box-shadow: 0 0 14px rgba(193,97,63,0.6); }
+      #s3 .glow { position: absolute; left: 50%; top: 232px; width: 420px; height: 250px; margin-left: -210px;
+        background: radial-gradient(ellipse at center, rgba(217,119,87,0.30), rgba(217,119,87,0.05) 58%, transparent 74%);
+        filter: blur(12px); opacity: 0; }
+      #s3 .pct { position: absolute; left: 0; right: 0; top: 214px; text-align: center; }
+      #s3 .pct .v { display: inline-block; font-family: var(--sans); font-weight: 800; font-size: 132px; line-height: 1; color: var(--clay-brand); letter-spacing: -0.06em; }
+      #s3 .pct .l { font-family: var(--mono); font-size: 19px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--noir); margin-top: 2px; }
+      #s3 .dot.ghost { opacity: 0; pointer-events: none; }
+      #s3 .ann { position: absolute; top: 242px; width: 190px; display: flex; flex-direction: column; gap: 2px; opacity: 0; }
+      #s3 .ann.a { left: 0; align-items: flex-start; text-align: left; }
+      #s3 .ann.b { right: 0; align-items: flex-end; text-align: right; }
+      #s3 .ann .n { font-family: var(--sans); font-weight: 800; font-size: 48px; letter-spacing: -0.035em; line-height: 1; }
+      #s3 .ann.a .n { color: var(--clay-brand); }
+      #s3 .ann.b .n { color: var(--mid); }
+      #s3 .ann .n small { font-size: 26px; font-weight: 700; }
+      #s3 .ann .k { font-family: var(--mono); font-size: 15px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mid); margin-top: 2px; }
+      #s3 .ann .lead { display: block; width: 58px; height: 1px; background: var(--border); margin-top: 10px; }
+      #s3 .eff { margin-top: 14px; background: var(--salt); border: 1px solid var(--oat); border-radius: 22px; padding: 20px 22px 18px; }
+      #s3 .eff .eh { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+      #s3 .eff .eh .t { font-family: var(--mono); font-size: 17px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--clay-deep); font-weight: 500; }
+      #s3 .eff .eh .n { font-family: var(--mono); font-size: 17px; letter-spacing: 0.1em; color: var(--mid); }
+      #s3 .eff .row { display: flex; align-items: center; gap: 14px; margin-bottom: 9px; }
+      #s3 .eff .row:last-child { margin-bottom: 0; }
+      #s3 .eff .lab { flex: 0 0 236px; font-size: 23px; color: var(--noir); font-weight: 500; }
+      #s3 .eff .track { flex: 1; height: 18px; background: rgba(20,20,19,0.06); border-radius: 5px; overflow: hidden; }
+      #s3 .eff .bar { display: block; height: 100%; width: 0%; border-radius: 5px; }
+      #s3 .eff .row.a .bar { background: var(--sand); }
+      #s3 .eff .row.b .bar { background: var(--clay); }
+      #s3 .eff .row.c .bar { background: var(--clay-deep); }
+      #s3 .eff .val { flex: 0 0 62px; text-align: right; font-family: var(--sans); font-weight: 800; font-size: 25px; }
+
+      /* ---------- S4 what did NOT change ---------- */
+      #s4 .rows { margin-top: 8px; }
+      #s4 .row { display: flex; align-items: flex-start; gap: 22px; padding: 24px 0; border-top: 1px solid var(--oat); }
+      #s4 .row:last-child { border-bottom: 1px solid var(--oat); }
+      #s4 .idx { flex: 0 0 52px; font-family: var(--mono); font-size: 20px; color: var(--mid); padding-top: 8px; }
+      #s4 .row .h { font-family: var(--sans); font-weight: 800; font-size: 44px; letter-spacing: -0.035em; line-height: 1.1; }
+      #s4 .row .h .no { color: var(--clay-brand); }
+      #s4 .row .d { font-size: 26px; color: var(--noir); margin-top: 6px; line-height: 1.4; }
+      #s4 .note { margin-top: 26px; font-family: var(--mono); font-size: 20px; line-height: 1.5; letter-spacing: 0.06em; color: var(--clay-deep); }
+
+      /* ---------- S5 2029 ---------- */
+      #s5 .yr { font-family: var(--sans); font-weight: 800; font-size: 226px; letter-spacing: -0.06em; line-height: 0.86; }
+      #s5 .yr span { color: rgba(20,20,19,0.16); }
+      #s5 .tl { position: relative; height: 96px; margin-top: 40px; }
+      #s5 .tl .base { position: absolute; left: 0; right: 0; top: 20px; height: 3px; background: rgba(20,20,19,0.1); }
+      #s5 .tl .fill { position: absolute; left: 0; top: 20px; height: 3px; width: 0%; background: var(--clay-brand); }
+      #s5 .tl .mk { position: absolute; left: 0; top: 12px; width: 19px; height: 19px; border-radius: 50%; background: var(--clay-deep); margin-left: -9px; }
+      #s5 .tl .lab { position: absolute; top: 48px; font-family: var(--mono); font-size: 19px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mid); }
+
+      /* ---------- S6 twist ---------- */
+      #s6 .big92 { font-size: 216px; }
+      #s6 .cap { margin-top: 26px; font-size: 34px; }
+
+      /* ---------- S7 loop ---------- */
+      #s7 { align-items: center; text-align: center; }
+      #s7 .fin { font-size: 152px; line-height: 0.94; }
+      #s7 .fin em { display: block; font-family: var(--serif); font-style: italic; font-weight: 500;
+        color: var(--clay-brand); font-size: 88px; letter-spacing: -0.02em; margin-top: 10px; }
+      #s7 .cta { margin-top: 46px; display: inline-flex; align-items: center; gap: 14px; padding: 20px 30px;
+        border: 1.5px solid var(--clay-brand); border-radius: 999px; font-family: var(--mono); font-size: 22px;
+        letter-spacing: 0.16em; text-transform: uppercase; color: var(--clay-deep); background: rgba(250,249,245,0.7); }
+      #s7 .src { margin-top: 30px; font-family: var(--mono); font-size: 19px; letter-spacing: 0.1em; color: var(--mid); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="19.6" data-width="1080" data-height="1920">
+      <div class="bloomA"></div>
+      <div class="bloomB"></div>
+      <div class="lightpass"></div>
+      <div class="paper"></div>
+
+      <!-- ========== S1 · HOOK (0 → 1.8) ========== -->
+      <div class="scene clip" id="s1" data-start="0" data-duration="1.8" data-track-index="0">
+        <div class="punch">
+        <div class="kick" id="h0"><span class="dotmk"></span>Google · Science · 15.10.2026</div>
+        <div class="bl big" id="h3">40<span class="x">×</span> tozaroq</div>
+        <div class="ed hk" id="h1">Kvant xatosi <em>birinchi marta</em> real chipda</div>
+        <div class="sub" id="h4">Yangi chip <b>qurmasdan</b> — mavjud Willow protsessorida.</div>
+        </div>
+      </div>
+
+      <!-- ========== S2 · 95 % (1.8 → 5.0) ========== -->
+      <div class="scene clip" id="s2" data-start="1.8" data-duration="3.2" data-track-index="1">
+        <div class="punch">
+        <div class="kick"><span class="dotmk"></span>01 — Muammo</div>
+        <div class="ed" style="font-size:76px; margin-bottom:22px;">Kvant kompyuter <em>resursining</em></div>
+        <div class="arcwrap">
+          <svg width="480" height="480" viewBox="0 0 480 480">
+            <circle cx="240" cy="240" r="212" fill="none" stroke="#efece2" stroke-width="2" />
+            <g id="ticks"></g>
+            <circle id="arc" cx="240" cy="240" r="212" fill="none" stroke="#d97757" stroke-width="12"
+              stroke-linecap="round" />
+          </svg>
+          <div class="num"><div class="v"><span id="p95">0</span>%</div><div class="l">resurs shu yerda</div></div>
+        </div>
+        <div class="cap">Fault-tolerant kvant kompyuterda <b>magic holat</b> ishlab chiqarish shu qismni yeb qo'yardi.</div>
+        </div>
+      </div>
+
+      <!-- ========== S3 · 8 % + efficiency chart (5.0 → 8.6) ========== -->
+      <div class="scene clip" id="s3" data-start="5.0" data-duration="3.6" data-track-index="2">
+        <div class="punch">
+        <div class="kick"><span class="dotmk"></span>02 — Yechim</div>
+        <div class="ed" style="font-size:78px; margin-bottom:6px;">Faqat <em>8%</em> omon qoladi</div>
+        <div class="funnel" id="funnel">
+          <div class="ring"></div>
+          <div class="glow" id="glow"></div>
+          <div class="halo" id="halo"></div>
+          <div class="gate" id="gateL">tekshiruv<small>post-seleksiya</small></div>
+          <div class="pct"><div class="v"><span id="p8">0</span>%</div><div class="l">urinish qoladi</div></div>
+          <div class="ann a" id="annA"><span class="n">8<small> / 100</small></span><span class="k">keyingi bosqichga</span><i class="lead"></i></div>
+          <div class="ann b" id="annB"><span class="n">92</span><span class="k">tashlanadi</span><i class="lead"></i></div>
+        </div>
+        <div class="eff" id="eff">
+          <div class="eh"><span class="t">Cultivation samaradorligi</span><span class="n">1 holat / 1 urinish</span></div>
+          <div class="row a"><span class="lab">100 urinish</span><span class="track"><span class="bar" data-w="100"></span></span><span class="val">100</span></div>
+          <div class="row b"><span class="lab">8 tasi filtrdan o'tadi</span><span class="track"><span class="bar" data-w="8"></span></span><span class="val">8</span></div>
+          <div class="row c"><span class="lab">1 tayyor magic holat</span><span class="track"><span class="bar" data-w="1.6"></span></span><span class="val">1</span></div>
+        </div>
+        </div>
+      </div>
+
+      <!-- ========== S4 · WHAT DID NOT CHANGE (8.6 → 11.6) ========== -->
+      <div class="scene clip" id="s4" data-start="8.6" data-duration="3.0" data-track-index="3">
+        <div class="punch">
+        <div class="kick"><span class="dotmk"></span>03 — Halol chegara</div>
+        <div class="ed" style="font-size:84px; margin-bottom:8px;">Nima <em>o'zgarmadi?</em></div>
+        <div class="rows">
+          <div class="row"><div class="idx">01</div><div><div class="h">Xarajat <span class="no">— yo'q</span></div><div class="d">Bu ishda tejamkorlik o'lchanmagan.</div></div></div>
+          <div class="row"><div class="idx">02</div><div><div class="h">Yangi chip <span class="no">— yo'q</span></div><div class="d">Natija mavjud Willow protsessorida olingan.</div></div></div>
+          <div class="row"><div class="idx">03</div><div><div class="h">Shifrlash <span class="no">— buzilmagan</span></div><div class="d">RSA-2048 uchun xatolik ~1 : 10 000 000 000 kerak.</div></div></div>
+        </div>
+        <div class="note">40× — xatoning kamayishi. Xarajatning emas.</div>
+        </div>
+      </div>
+
+      <!-- ========== S5 · 2029 (11.6 → 14.2) ========== -->
+      <div class="scene clip" id="s5" data-start="11.6" data-duration="2.6" data-track-index="4">
+        <div class="punch">
+        <div class="kick"><span class="dotmk"></span>04 — Keyingi qadam</div>
+        <div class="ed" style="font-size:72px; margin-bottom:18px;">Masshtab hali isbotlanmagan</div>
+        <div class="yr"><span>20</span>29</div>
+        <div class="cap" style="margin-top:26px">Google'ning fault-tolerant tizimga ko'chish <b>maqsadi</b>. Cultivation — shu yo'ldagi birinchi real qadam.</div>
+        <div class="tl">
+          <div class="base"></div><div class="fill" id="tlfill"></div><div class="mk" id="tlmk"></div>
+          <div class="lab" style="left:0">2024 · g'oya</div>
+          <div class="lab" style="right:0; text-align:right">2029 · maqsad</div>
+        </div>
+        </div>
+      </div>
+
+      <!-- ========== S6 · THE TWIST (14.2 → 16.6) ========== -->
+      <div class="scene clip" id="s6" data-start="14.2" data-duration="2.4" data-track-index="5">
+        <div class="punch">
+        <div class="kick"><span class="dotmk"></span>05 — Va yana bir narsa</div>
+        <div class="bl big92"><span id="p92">0</span><span style="color:var(--clay-brand)">%</span></div>
+        <div class="ed" style="font-size:70px; margin-top:6px;">urinish <em>tashlanadi</em></div>
+        <div class="cap">Filtr shunday ishlaydi: 100 tadan 92 tasi post-seleksiyada yo'qoladi. <b>Bu — yutuq emas, bu — narx.</b></div>
+        </div>
+      </div>
+
+      <!-- ========== S7 · LOOP PAYOFF (16.6 → 19.6) ========== -->
+      <div class="scene clip" id="s7" data-start="16.6" data-duration="3.0" data-track-index="6">
+        <div class="punch">
+        <div class="bl fin" id="fin">40<span class="cl">×</span> tozaroq<em>Hali boshlanishi</em></div>
+        <div class="cta" id="cta"><span>Saqlab qo'ying</span><span>·</span><span>Keyingi qism</span></div>
+        <div class="src" id="src">Manba: Science · DOI 10.1126/science.aee7961</div>
+        </div>
+      </div>
+
+      <!-- ---------- HUD ---------- -->
+      <div class="hud">
+        <div class="corner c-tl"></div><div class="corner c-tr"></div>
+        <div class="corner c-bl"></div><div class="corner c-br"></div>
+        <div class="bot">
+          <span class="swipe"><span class="ar" id="arrow">↗</span> <span id="botlab">kvanт · google</span></span>
+          <span>@DIYOR.CTR</span>
+        </div>
+      </div>
+
+      <audio id="fx" src="assets/fx.ogg" data-start="0" data-duration="19.6" data-track-index="9" data-volume="0.92"></audio>
+    </div>
+
+    <script>
+      gsap.registerPlugin(SplitText, DrawSVGPlugin, CustomEase);
+      CustomEase.create("snapEase", "M0,0 C0.14,0 0.2,1 1,1");
+      CustomEase.create("settle", "M0,0 C0.16,0.84 0.24,1 1,1");
+      CustomEase.create("paper", "M0,0 C0.33,0.02 0.2,1 1,1");
+
+      const D = 19.6;
+            const SC_IDS = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+const CUT = [0, 1.8, 5.0, 8.6, 11.6, 14.2, 16.6];
+
+      /* ---------- deterministic PRNG ---------- */
+      let seed = 20261015;
+      const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+
+      /* ---------- 95 % ticks ---------- */
+      (function () {
+        const NS = "http://www.w3.org/2000/svg", g = document.getElementById("ticks");
+        for (let i = 0; i < 60; i++) {
+          const a = (i / 60) * Math.PI * 2 - Math.PI / 2;
+          const l = document.createElementNS(NS, "line");
+          const r1 = 212 - 11, r2 = 212 - (i % 5 === 0 ? 22 : 16);
+          l.setAttribute("x1", (240 + Math.cos(a) * r1).toFixed(1));
+          l.setAttribute("y1", (240 + Math.sin(a) * r1).toFixed(1));
+          l.setAttribute("x2", (240 + Math.cos(a) * r2).toFixed(1));
+          l.setAttribute("y2", (240 + Math.sin(a) * r2).toFixed(1));
+          l.setAttribute("stroke", i % 5 === 0 ? "#d4a27f" : "#e6e0d2");
+          l.setAttribute("stroke-width", "2");
+          g.appendChild(l);
+        }
+      })();
+
+      /* ---------- funnel dots: one centre, one exact target ---------- */
+      const F = { cx: 0, ringR: 150, spawnY: 96, targetY: 96, haloR: 116 };
+      (function () {
+        const host = document.getElementById("funnel"), N = 72;
+        F.cx = host.clientWidth / 2;   /* TRUE centre of the ring — no magic 540 */
+        for (let i = 0; i < N; i++) {
+          const d = document.createElement("div");
+          const keep = i < 8;
+          d.className = "dot" + (keep ? " keep" : "");
+          const ang = (i / N) * Math.PI * 2 + rnd() * 0.06;
+          const r = F.ringR + (rnd() - 0.5) * 12;
+          d.dataset.x = (F.cx + Math.cos(ang) * r).toFixed(1);
+          d.dataset.y = (F.spawnY + Math.sin(ang) * r).toFixed(1);
+          d.dataset.keep = keep ? "1" : "0";
+          d.style.left = d.dataset.x + "px";
+          d.style.top = d.dataset.y + "px";
+          host.appendChild(d);
+          d._ghosts = [];
+          for (let gi = 0; gi < 2; gi++) {
+            const gh = d.cloneNode(false);
+            gh.className = d.className + " ghost";
+            host.appendChild(gh);
+            d._ghosts.push(gh);
+          }
+        }
+      })();
+
+      const tl = gsap.timeline({ paused: true });
+
+      /* ---------- hard scene gating (render-safe, frame exact) ---------- */
+      const SC = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+      const ENDS = [1.8, 5.0, 8.6, 11.6, 14.2, 16.6, 19.6];
+      SC.forEach((id, i) => {
+        const el = document.getElementById(id);
+        gsap.set(el, { opacity: i === 0 ? 1 : 0 });
+        if (i > 0) tl.set(el, { opacity: 1 }, CUT[i] - 0.0001);
+        tl.set(el, { opacity: 0 }, i === ENDS.length - 1 ? ENDS[i] - 0.001 : ENDS[i] + 0.02);
+        if (i === 0) tl.set(el, { opacity: 1 }, 0);
+        if (i === 0) tl.set(el, { opacity: 0 }, ENDS[0] - 0.0001);
+        /* (c) whip-pan: 3-frame lateral snap + blur on every hard cut */
+        const dir = i % 2 === 0 ? 1 : -1;
+        if (i > 0) {
+          tl.fromTo(el, { x: 84 * dir, scale: 1.06 },
+            { x: 0, scale: 1, duration: 0.18, ease: "power3.out" }, CUT[i]);
+        }
+        if (i < ENDS.length - 1) {
+          /* outgoing side of the whip: snaps away and blurs out over 3 frames */
+          tl.to(el, { x: -72 * dir, scale: 0.985, opacity: 0,
+            duration: 0.13, ease: "power2.in" }, ENDS[i] - 0.12);
+          tl.set(el, { x: 0, scale: 1 }, ENDS[i] + 0.03);
+        }
+      });
+
+      /* ---------- ambience (whole piece) ---------- */
+      tl.fromTo(".bloomA", { x: -60, y: -40 }, { x: 90, y: 70, duration: D, ease: "sine.inOut" }, 0);
+      tl.fromTo(".bloomB", { x: 50, y: 40 }, { x: -80, y: -60, duration: D, ease: "sine.inOut" }, 0);
+            tl.fromTo(".hud .corner, .hud .top, .hud .bot", { opacity: 0 }, { opacity: 1, duration: 0.35, ease: "power2.out", stagger: 0.04 }, 0.05);
+
+      /* ================= S1 · HOOK 0 → 1.8 (no fade-in: first frame is already full) ================= */
+      gsap.set("#h0", { opacity: 1 });
+      gsap.set("#h3", { opacity: 1 });
+      tl.fromTo("#h3", { scale: 1.07 }, { scale: 1, duration: 0.6, ease: "power3.out" }, 0);
+      const sp1 = new SplitText("#h1", { type: "words" });
+      tl.fromTo(sp1.words, { yPercent: 115, opacity: 0 }, { yPercent: 0, opacity: 1, duration: 0.5, ease: "settle", stagger: 0.035 }, 0.3);
+      tl.fromTo("#h4", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.36, ease: "power3.out" }, 0.72);
+      /* fixed subject: dip first (anticipation), then a slow push - never static */
+      tl.fromTo("#s1", { scale: 1.012, y: 6 }, { scale: 1.008, y: 0, duration: 0.16, ease: "power2.in" }, 0);
+      tl.fromTo("#s1", { scale: 1.008, y: 0 }, { scale: 1.042, y: -4, duration: 1.64, ease: "power1.out" }, 0.16);
+
+      /* ===== MICRO-LIFE: no scene is ever a still frame ===== */
+      function microLife(cuts) {
+        const S = (id) => document.getElementById(id);
+        /* 1 · the whole frame drifts on one 10 s breathing curve (seamless at the loop point) */
+        SC_IDS.forEach((id, i) => {
+          const el = S(id);
+          if (!el) return;
+          const dir = i % 2 ? -1 : 1;
+          tl.fromTo(el, { scale: 1.0, y: 0 }, { scale: 1.018, y: -6 * dir, duration: D, ease: "sine.inOut" }, 0);
+        });
+        /* 2 · section rules redraw themselves */
+        gsap.utils.toArray(".kick").forEach((k) => {
+          tl.fromTo(k, { "--rule": 0 }, { "--rule": 100, duration: 0.5, ease: "power2.out" }, 0.05);
+        });
+        /* 3 · continuous background life: two slow counter-drifting gradients = depth, never static */
+        if (document.querySelector(".bloomA")) {
+          tl.fromTo(".bloomA", { xPercent: 0, yPercent: 0 }, { xPercent: 6, yPercent: -4, duration: D, ease: "sine.inOut" }, 0);
+          tl.fromTo(".bloomB", { xPercent: 0, yPercent: 0 }, { xPercent: -5, yPercent: 5, duration: D, ease: "sine.inOut" }, 0);
+        }
+        /* 3a'' · tick shimmer after the arc lands (3.4-4.9) */
+        if (document.querySelector("#ticks line")) {
+          /* one bright sweep around the dial = the arc "breathing", reads at any speed */
+          const ticks = gsap.utils.toArray("#ticks line");
+          gsap.set(ticks, { opacity: 1 });
+          ticks.forEach((l, i) => {
+            tl.to(l, { opacity: 0.28, duration: 0.16, ease: "sine.inOut", yoyo: true, repeat: 7 }, 3.40 + i * 0.012);
+          });
+        }
+        /* 3a · the 95 % arc keeps sweeping (round caps make the rotation readable) */
+        if (document.querySelector("#arc")) {
+          /* pivot must be the circle's centre: bbox-based origins break as soon as the dash is short */
+          gsap.set("#arc", { svgOrigin: "240 240", rotation: -90 });
+          tl.fromTo("#arc", { rotation: -90 }, { rotation: -97, duration: 3.0, ease: "sine.inOut", svgOrigin: "240 240" }, 2.0);
+        }
+        /* 3a' · the 2029 marker breathes after it lands */
+        if (document.querySelector("#tlmk")) {
+          tl.fromTo("#tlmk", { scale: 1 }, { scale: 1.45, duration: 0.26, ease: "sine.inOut", yoyo: true, repeat: 4 }, 12.55);
+        }
+        /* 3b · ornaments keep turning: a dashed ring that rotates reads as "live instrument" */
+        gsap.utils.toArray("#s3 .ring, #s3 .halo, .spark-rot").forEach((el, i) => {
+          tl.fromTo(el, { rotation: 0 }, { rotation: i % 2 ? -24 : 32, duration: D, ease: "none" }, 0);
+        });
+        /* 3c · a light sweep crosses the chart card once, so the panel is never inert */
+        if (document.querySelector("#eff")) {
+          tl.fromTo("#eff", { backgroundPosition: "-140% 0" },
+            { backgroundPosition: "240% 0", duration: 1.5, ease: "sine.inOut" }, 7.7);
+        }
+        /* 3c' · loop wind-up: the payoff frame creeps in so the cut back to S1 reads as a loop */
+        if (document.querySelector("#s7")) {
+          tl.fromTo("#s7", { scale: 1.0 }, { scale: 1.03, duration: 0.7, ease: "power2.in" }, 18.9);
+        }
+        /* 3d · scene OUTRO: the last half second creeps forward, so a cut never lands on a freeze */
+        SC_IDS.forEach((id, i) => {
+          const el = S(id);
+          const t1 = cuts[i + 1];
+          if (!el || t1 === undefined) return;
+          tl.to(el, { scale: 1.026, duration: 0.55, ease: "sine.inOut" }, Math.max(0, t1 - 0.55));
+        });
+        /* 5 · light pass: one slow highlight crosses the frame, so it is never mathematically still */
+        if (document.querySelector(".lightpass")) {
+          tl.fromTo(".lightpass", { xPercent: -55 }, { xPercent: 55, duration: D, ease: "none" }, 0);
+        }
+        /* 4 · MACRO: one continuous, eased push on the scene's text column.
+           It lives on .punch (exclusive), so the whip-pan's x/scale can never overwrite it and
+           the old broken letterSpacing tween (gsap.getProperty returns a number -> GSAP fell
+           back to `normal` and the text visibly jumped) is gone. */
+        document.querySelectorAll(".scene, .stage").forEach((sc, si) => {
+          const t0 = cuts[si], t1 = cuts[si + 1];
+          if (t1 === undefined) return;
+          const el = sc.querySelector(".punch") || sc.querySelector(".ed, .cap, .sub, h2, h1");
+          if (!el) return;
+          const dir = si % 2 ? -1 : 1;
+          tl.fromTo(el, { scale: 1.0, y: 0 },
+            { scale: 1.012, y: -10 * dir, duration: Math.max(0.5, t1 - t0 + 0.3), ease: "sine.inOut" }, t0);
+        });
+      }
+
+      /* PARALLAX */
+      tl.fromTo(".bloomA", { xPercent: -2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 1.8);
+      tl.fromTo(".bloomB", { xPercent: 2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 1.8);
+      tl.fromTo(".bloomA", { xPercent: 2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 5.0);
+      tl.fromTo(".bloomB", { xPercent: -2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 5.0);
+      tl.fromTo(".bloomA", { xPercent: -2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 8.6);
+      tl.fromTo(".bloomB", { xPercent: 2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 8.6);
+      tl.fromTo(".bloomA", { xPercent: 2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 11.6);
+      tl.fromTo(".bloomB", { xPercent: -2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 11.6);
+      tl.fromTo(".bloomA", { xPercent: -2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 14.2);
+      tl.fromTo(".bloomB", { xPercent: 2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 14.2);
+      tl.fromTo(".bloomA", { xPercent: 2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 16.6);
+      tl.fromTo(".bloomB", { xPercent: -2 }, { xPercent: 0, duration: 0.75, ease: "power2.out" }, 16.6);
+
+      /* ================= S2 · 95 % ================= */
+      tl.fromTo("#s2 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 1.80);
+      const spS2 = new SplitText("#s2 .ed", { type: "words" });
+      tl.fromTo(spS2.words, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "snapEase", stagger: 0.05 }, 1.88);
+      tl.fromTo("#s2 .arcwrap", { scale: 0.94, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.5, ease: "power3.out" }, 2.02);
+      tl.fromTo("#ticks line", { opacity: 0 }, { opacity: 1, duration: 0.15, stagger: { each: 0.008 } }, 2.1);
+      tl.fromTo("#arc", { drawSVG: "0%" }, { drawSVG: "95%", duration: 1.25, ease: "power2.inOut" }, 2.12);
+      (function () {
+        const el = document.getElementById("p95"), p = { _v: 0 };
+        Object.defineProperty(p, "v", { get() { return this._v; }, set(x) { this._v = x; el.textContent = Math.round(x); } });
+        tl.to(p, { v: 95, duration: 1.25, ease: "power2.inOut" }, 2.12);
+      })();
+      tl.fromTo("#s2 .cap", { y: 12, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.4, ease: "power3.out" }, 2.92);
+
+      /* ================= S3 · 8 % + chart ================= */
+      tl.fromTo("#s3 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 5.00);
+      const spS3 = new SplitText("#s3 .ed", { type: "words" });
+      tl.fromTo(spS3.words, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "snapEase", stagger: 0.05 }, 5.08);
+      tl.fromTo("#s3 .ring, #s3 .gate", { scale: 0.72, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.55, ease: "back.out(1.5)", stagger: 0.08 }, 5.25);
+
+      const dots = gsap.utils.toArray("#funnel .dot:not(.ghost)");
+      dots.forEach((d, i) => {
+        const sx = parseFloat(d.dataset.x), sy = parseFloat(d.dataset.y);
+        const isKeep = d.dataset.keep === "1";
+        /* 5.35 - 5.90 : spawn on the outer ring */
+        tl.fromTo(d, { x: (F.cx - sx) * 1.25, y: -64, opacity: 0, scale: 0.5 },
+          { x: 0, y: 0, opacity: 1, scale: 1, duration: 0.38, ease: "power2.out" }, 5.35 + (i % 13) * 0.015);
+        /* 6.05 - 6.62 : ALL dots drive to the same centre pixel, failures fade to zero */
+        const t0 = 6.02 + (i % 9) * 0.013;
+        tl.to(d, {
+          x: F.cx - sx, y: F.targetY - sy, duration: isKeep ? 0.56 : 0.50,
+          ease: isKeep ? "power3.inOut" : "power3.in",
+          opacity: isKeep ? 1 : 0, scale: isKeep ? 1.35 : 0.4
+        }, t0);
+        /* (a) motion blur on the moving dot + a real trail behind it */
+        /* trail comes from the ghost clones - no per-dot filter layer */
+        tl.to(d, { duration: 0.46, ease: "power2.out" }, t0);
+        d._ghosts.forEach((gh, gi) => {
+          const lag = 0.034 * (gi + 1);
+          tl.fromTo(gh, { x: (F.cx - sx) * 1.2, y: -60, opacity: 0, scale: 0.5 },
+            { x: 0, y: 0, opacity: 0.30 - gi * 0.11, scale: 1, duration: 0.38, ease: "power2.out" }, 5.35 + (i % 13) * 0.015 + lag);
+          tl.to(gh, {
+            x: F.cx - sx, y: F.targetY - sy, duration: isKeep ? 0.56 : 0.50,
+            ease: isKeep ? "power3.inOut" : "power3.in",
+            opacity: isKeep ? 0.32 - gi * 0.12 : 0, scale: isKeep ? 1.2 : 0.4
+          }, t0 + lag);
+        });
+      });
+
+      /* 6.60 - 7.00 : label clears, survivors pop onto ONE exact circle */
+      tl.to("#gateL", { opacity: 0, y: -10, duration: 0.22, ease: "power2.in" }, 6.62);
+      tl.fromTo("#halo", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.3, ease: "power2.out" }, 6.74);
+      dots.filter((d) => d.dataset.keep === "1").forEach((d, k) => {
+        const sx = parseFloat(d.dataset.x), sy = parseFloat(d.dataset.y);
+        const ang = -Math.PI / 2 + (k / 8) * Math.PI * 2;
+        tl.to(d, {
+          x: F.cx + Math.cos(ang) * F.haloR - sx,
+          y: F.targetY + Math.sin(ang) * F.haloR - sy,
+          scale: 1.45, opacity: 1, duration: 0.30, ease: "back.out(1.6)"
+        }, 6.76 + k * 0.014);
+        tl.to(d, { scale: 1.9, opacity: 0, duration: 0.18, ease: "power2.in" }, 7.24 + k * 0.009);
+        d._ghosts.forEach((gh, gi) => {
+          tl.to(gh, {
+            x: F.cx + Math.cos(ang) * F.haloR - sx,
+            y: F.targetY + Math.sin(ang) * F.haloR - sy,
+            scale: 1.3, opacity: 0.26 - gi * 0.1, duration: 0.34, ease: "back.out(1.5)"
+          }, 6.79 + k * 0.014 + gi * 0.03);
+          tl.to(gh, { opacity: 0, duration: 0.2 }, 7.14 + k * 0.01);
+        });
+      });
+
+      /* 6.90 - 7.10 : the number lands exactly when the halo is complete */
+      /* (b) annotations fill the dead space around the numeral */
+      tl.fromTo("#annA, #annB", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.42, ease: "power2.out", stagger: 0.07 }, 7.16);
+      tl.fromTo("#glow", { opacity: 0, scale: 0.72 }, { opacity: 1, scale: 1, duration: 0.45, ease: "power2.out" }, 7.16);
+      tl.fromTo("#s3 .pct", { opacity: 0, y: 20, scale: 0.92 }, { opacity: 1, y: 0, scale: 1, duration: 0.5, ease: "back.out(1.9)" }, 7.20);
+      (function () {
+        const el = document.getElementById("p8"), pp = { _v: 0 };
+        Object.defineProperty(pp, "v", { get() { return this._v; }, set(x) { this._v = x; el.textContent = Math.round(x); } });
+        tl.to(pp, { v: 8, duration: 0.5, ease: "power2.out" }, 7.26);
+      })();
+      tl.fromTo("#halo", { opacity: 1 }, { opacity: 0, duration: 0.4, ease: "power2.in" }, 7.46);
+      tl.fromTo("#eff", { y: 26, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "power3.out" }, 7.55);
+      document.querySelectorAll("#eff .bar").forEach((b, i) => {
+        tl.fromTo(b, { width: "0%" }, { width: b.dataset.w + "%", duration: 0.62, ease: "power3.out" }, 7.66 + i * 0.1);
+        tl.fromTo(b.closest(".row"), { opacity: 0.25 }, { opacity: 1, duration: 0.3 }, 7.70 + i * 0.1);
+      });
+
+      /* ================= S4 · what did NOT change ================= */
+      tl.fromTo("#s4 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 8.60);
+      const spS4 = new SplitText("#s4 .ed", { type: "words" });
+      tl.fromTo(spS4.words, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "snapEase", stagger: 0.05 }, 8.68);
+      tl.fromTo("#s4 .row", { y: 26, opacity: 0 }, { y: 0, opacity: 1, duration: 0.42, ease: "power3.out", stagger: 0.18 }, 8.95);
+      tl.fromTo("#s4 .note", { y: 14, opacity: 0 }, { y: 0, opacity: 1, duration: 0.38, ease: "power2.out" }, 10.35);
+
+      /* ================= S5 · 2029 ================= */
+      tl.fromTo("#s5 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 11.60);
+      const spS5 = new SplitText("#s5 .ed", { type: "words" });
+      tl.fromTo(spS5.words, { y: 36, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "snapEase", stagger: 0.045 }, 11.68);
+      tl.fromTo("#s5 .yr", { y: 30, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "power3.out" }, 11.9);
+      tl.fromTo("#s5 .cap", { y: 12, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.4, ease: "power3.out" }, 12.15);
+      tl.fromTo("#s5 .tl", { opacity: 0 }, { opacity: 1, duration: 0.3 }, 12.4);
+      tl.fromTo("#tlfill", { width: "0%" }, { width: "100%", duration: 0.9, ease: "power2.inOut" }, 12.45);
+      tl.fromTo("#tlmk", { x: 0, scale: 0.5 }, { x: 888, scale: 1, duration: 0.9, ease: "power2.inOut" }, 12.45);
+      tl.fromTo("#s5 .tl .lab", { opacity: 0 }, { opacity: 1, duration: 0.3, stagger: 0.4 }, 12.5);
+
+      /* ================= S6 · the twist ================= */
+      tl.fromTo("#s6 .kick", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3, ease: "power3.out" }, 14.20);
+      tl.fromTo("#s6 .big92", { scale: 0.86, opacity: 0, y: 20 }, { scale: 1, opacity: 1, y: 0, duration: 0.52, ease: "back.out(1.55)" }, 14.3);
+      (function () {
+        const el = document.getElementById("p92"), p = { _v: 0 };
+        Object.defineProperty(p, "v", { get() { return this._v; }, set(x) { this._v = x; el.textContent = Math.round(x); } });
+        tl.to(p, { v: 92, duration: 0.62, ease: "power2.out" }, 14.32);
+      })();
+      const spS6 = new SplitText("#s6 .ed", { type: "words" });
+      tl.fromTo(spS6.words, { y: 34, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "snapEase", stagger: 0.05 }, 14.5);
+      tl.fromTo("#s6 .cap", { y: 12, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.4, ease: "power3.out" }, 14.72);
+
+      /* ================= S7 · loop payoff ================= */
+      tl.fromTo("#fin", { scale: 0.94, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.5, ease: "snapEase" }, 16.62);
+      tl.fromTo("#cta", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.42, ease: "power3.out" }, 17.15);
+      tl.fromTo("#src", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 17.4);
+      tl.fromTo("#arrow", { x: -4 }, { x: 4, duration: 0.5, repeat: 3, yoyo: true, ease: "sine.inOut" }, 17.3);
+      tl.to("#s7", { scale: 1.02, duration: 2.9, ease: "none" }, 16.6);
+
+      /* ================= HUD clock + chapter tags ================= */
+
+      /* digital odometer: digits STEP once per second (precision, not a liquid roll) */
+
+      microLife([0, 1.8, 5.0, 8.6, 11.6, 14.2, 16.6, 19.6]);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

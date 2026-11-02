@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"><title>Clawd dynamic overlay — @diyor.ctr</title>
+  <script src="lib/p5.min.js"></script>
+  <script src="lib/p5.brush.js"></script>
+</head>
+<body>
+  <main><canvas id="out" width="1080" height="1920"></canvas></main>
+  <script src="src/config.js"></script>
+  <script>
+    const _qp = new URLSearchParams(location.search);
+    PROJECT.variant = _qp.get('variant') || 'feed';
+    PROJECT.duration = parseFloat(_qp.get('dur') || '9.0');
+    PROJECT.clear = true;
+    if (PROJECT.variant === 'feed') {
+      document.getElementById('out').height = 1350;
+    }
+  </script>
+  <script src="src/core.js"></script>
+  <script src="src/clawd.js"></script>
+  <script src="src/timeline.js"></script>
+  <script>
+    (() => {
+      const qp = new URLSearchParams(location.search);
+      const variant = qp.get('variant') || 'feed';
+      const durTotal = PROJECT.duration;
+      const hookStart = parseFloat(qp.get('hook') || '0.35');
+      const outroStart = parseFloat(qp.get('outro') || String(Math.max(3.6, durTotal - 2.8)));
+
+      const Z = {
+        brief: { u: 20, hook: { x: 874, y: 1210, from: 230, flip: true }, loop: { x: 840, y: 1410, from: 220, flip: true }, loopU: 21 },
+        feed:  { u: 16, hook: { x: 882, y: 1018, from: 200, flip: true }, loop: { x: 868, y: 1098, from: 195, flip: true }, loopU: 17 },
+      }[variant] || { u: 16, hook: { x: 882, y: 1018, from: 200, flip: true }, loop: { x: 868, y: 1098, from: 195, flip: true }, loopU: 17 };
+
+      function TITLE(t, lt, dur) {
+        const u = Z.u, X = Z.hook.x, Y = Z.hook.y;
+        if (lt < .02 || lt > 2.65) return;
+        const exitK = ease(seg(lt, 2.25, 2.62));
+        const hop = jump(lt, .04, .34, 2.5);
+        const xIn = lerp(X + Z.hook.from, X, backOut(seg(lt, 0, .34)));
+        const x = lerp(xIn, X + 220, exitK);
+        const mood = emotions(lt, [[.10, 'surprised'], [.44, 'excited'], [.95, 'starstruck']]);
+        const point = ease(seg(lt, .28, .46)) * (1 - ease(seg(lt, .82, 1.04)));
+        const FL = !!Z.hook.flip, sg = FL ? -1 : 1;
+        const pointArm = lerp(mood.aL ?? .2, -1.2, point), otherArm = lerp(mood.aR ?? .2, .6, point * .5);
+        clawd(x, Y, u, {
+          ...mood,
+          flip: FL,
+          dy: (mood.dy || 0) + hop.dy,
+          sq: (mood.sq || 0) + hop.sq,
+          aL: FL ? otherArm : pointArm,
+          aR: FL ? pointArm : otherArm,
+          lookX: lerp(-.3, -1, point) * sg, lookY: lerp(0, -.85, point),
+          rot: (mood.rot || 0) - .05 * point * sg,
+          boilKey: 'clawd-hook',
+        });
+        const k = seg(lt, .92, 1.24);
+        if (k > 0 && k < 1) {
+          boilSeed('mark');
+          for (const [dx, dy, r] of [[-38, -172, 22], [26, -198, 15], [-6, -218, 10]])
+            paint(starPts(x + dx, Y + dy, r * backOut(k) * (1 - .45 * k), .3, 4, k * 2),
+              { wash: PAL.cream, fill: PAL.ochre, fillOp: 80, ink: PAL.ink, sw: .9 });
+        }
+        flushBrush();
+      }
+
+      function OUTRO(t, lt, dur) {
+        const u = Z.loopU, X = Z.loop.x, Y = Z.loop.y;
+        if (lt < .02) return;
+        const hop = jump(lt, .04, .34, 2.7);
+        const x = lerp(X + Z.loop.from, X, backOut(seg(lt, 0, .34)));
+        const wave = seg(lt, .34, .50) * (1 - ease(seg(lt, dur - .75, dur - .35)));
+        const FL = !!Z.loop.flip;
+        const mood = emotions(lt, [[.10, 'excited'], [.65, 'happy'], [1.35, 'proud'], [Math.max(1.6, dur - .9), 'playful']]);
+        clawd(x, Y, u, {
+          ...mood,
+          flip: FL,
+          dy: (mood.dy || 0) + hop.dy,
+          sq: (mood.sq || 0) + hop.sq,
+          aL: lerp(mood.aL ?? .2, 1.3 + .45 * Math.sin(lt * 12), wave),
+          aR: lerp(mood.aR ?? .2, .6, wave * .35),
+          rot: (mood.rot || 0) + .05 * Math.sin(lt * 2.1),
+          boilKey: 'clawd-outro',
+        });
+        const k = seg(lt, .06, .48);
+        boilSeed('outrospark');
+        if (k > 0 && k < 1) for (let i = 0; i < 5; i++) {
+          const a = -Math.PI / 2 + (i - 2) * .4, d = 34 + 46 * backOut(k);
+          paint(starPts(x + Math.cos(a) * d, Y - 8 * u + Math.sin(a) * d - 10, 8 * (1 - k * .6) + 4, .32, 4),
+            { wash: PAL.cream, fill: PAL.ochre, fillOp: 70, ink: PAL.ink, sw: .7 });
+        }
+        flushBrush();
+      }
+
+      shots([[hookStart, TITLE], [outroStart, OUTRO]]);
+    })();
+  </script>
+</body>
+</html>
