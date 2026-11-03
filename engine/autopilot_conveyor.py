@@ -1399,7 +1399,7 @@ async def run_one_click_autopilot(
         "beat_scene_sync_count": len(beat_timings),
         "exact_harfma_harf_subtitles": bool(tts_meta.get("exact_word_boundaries")) and len(aligned_words) >= 6,
         "smart_focal_zoom_scenes": sum(
-            1 for s in bp["reel_config"].get("scenes", []) if ("focalX" in s or s.get("type") in ("media_card", "broll_card"))
+            1 for s in bp.get("reel_spec", {}).get("scenes", []) if ("focalX" in s or s.get("type") in ("media_card", "broll_card"))
         ),
     }
 
