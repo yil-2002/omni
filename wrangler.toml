@@ -1,0 +1,15 @@
+# Agent-02 — alohida Cloudflare akkauntida deploy qilinadi (limitlar bo'lishilmaydi).
+# Bu faylda HECH QANDAY secret qiymati yo'q — faqat nomlar va ochiq sozlamalar.
+name = "agent-02-reviewer"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[ai]
+binding = "AI"
+
+[vars]
+AGENT_ID = "agent-02-reviewer"
+DIRECTOR_URL = "https://diyor-agency-24-7.pages.dev/api/sync"
+# Secret'lar (wrangler secret put bilan qo'shiladi, bu faylga YOZILMAYDI):
+#   AGENT_KEY       — Director `jamoa_hello` javobida bergan kalit (ACK yuborish uchun)
+#   INBOUND_SECRET  — ixtiyoriy: Director → Agent-02 kirishini himoyalash
