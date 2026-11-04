@@ -1,0 +1,29 @@
+# Agent-02 — alohida Cloudflare akkauntida deploy qilinadi (limitlar bo'lishilmaydi).
+# Bu faylda HECH QANDAY secret qiymati yo'q — faqat nomlar va ochiq sozlamalar.
+name = "agent-02-reviewer"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Workers AI binding — MAJBURIY. Buning bo'lmasa /task 503 `ai_binding_missing` qaytaradi
+# va /health ichida ready:false bo'ladi (fail-closed).
+[ai]
+binding = "AI"
+
+[vars]
+AGENT_ID = "agent-02-reviewer"
+# Director `jamoa_ack` endpoint'i. Sxema: {ok:true, task_id, status}.
+DIRECTOR_URL = "https://diyor-agency-24-7.pages.dev/api/sync"
+
+# Secret'lar — `npx wrangler secret put <NOM>` bilan qo'shiladi, bu faylga YOZILMAYDI.
+# Ikkalasi ham MAJBURIY (production talabi, "ixtiyoriy himoya" emas):
+#   INBOUND_SECRET — Director → Agent-02 kirishini autentifikatsiya qiladi (X-Relay-Secret).
+#                    Yo'q bo'lsa /task 503 `inbound_secret_missing` (fail-closed).
+#                    ⚠️ Director tomonda route.secret_binding sozlanishi shart, aks holda
+#                    barcha TASK'lar 401 bo'ladi.
+#   AGENT_KEY      — Director `jamoa_hello` javobida bergan kalit (ACK X-Agent-Key uchun).
+#                    Yo'q bo'lsa /health ready:false.
+#
+# Ixtiyoriy (hozircha ISHLATILMAYDI, faqat kelajak uchun izoh):
+#   KV namespace TASK_DEDUPE — global dedupe uchun. Hozirgi dedupe faqat bitta isolate
+#   ichida ishlaydi. Global "exactly once" kerak bo'lsa Durable Object tavsiya etiladi
+#   (README'da ochiq yozilgan). Yashirin binding qo'shilmagan.
