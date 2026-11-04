@@ -1,0 +1,6 @@
+.env
+.env.*
+.dev.vars
+node_modules/
+*.zip
+wrangler.toml.bak
