@@ -1,0 +1,11 @@
+agent02_reviewer_worker_package_v1.4 — fayl yaxlitligi (integrity)
+version: 1.4.0
+generated: 2026-11-04T11:45:41Z
+algorithm: sha256
+
+ede01c092ad1622c3ac18907125c6d774a253a996e75f02a2a7ec73c7afd6fc5  worker.js
+e26de41672a8485c14d5d77ca0d304ccae36131bfe86db77c5843e7c45a5bae0  selftest.mjs
+02ea3a898e37301ffcd30140687569157e807586aa31456d86a89e21b5f5fc21  README.md
+ed4bf2d7ba751c9e23af523982d4cb17be81929126cce148a092008162bc2420  wrangler.toml
+a24a591144d7349674ab8e44e013c61296d3d5523510da6fb6035982a925c60f  package.json
+7229207a929dd6787362e6a4cdf204b6a96fcebe0f6ad2d77127ba122baa2e1a  .gitignore
